@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# 敏感資料檔案
+data/*.DBF
+data/*.dbf
+totfa.xml
+data_schema.md
+*.odt
+
+# 輸出檔案
+blood_pressure_export.xml
+bp_export.xml
+*.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 測試資料
+test_data/
+*.test.xml
+
+# 暫存檔案
+*.tmp
+*.bak
+*.log
