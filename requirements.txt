@@ -1,1 +1,22 @@
+# 核心依賴
 dbf>=0.99.0
+PySide6>=6.5.0
+
+# 類型提示和資料驗證
+typing-extensions>=4.0.0
+
+# 日誌和配置
+structlog>=21.0.0
+
+# 測試依賴（開發時安裝）
+# pytest>=7.0.0
+# pytest-qt>=4.0.0
+# pytest-cov>=4.0.0
+
+# 程式碼品質（開發時安裝）
+# black>=22.0.0
+# flake8>=5.0.0
+# mypy>=1.0.0
+
+# 打包工具（部署時安裝）
+# PyInstaller>=5.0.0

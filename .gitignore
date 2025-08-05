@@ -24,6 +24,7 @@ bp_export.xml
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -40,3 +41,5 @@ test_data/
 *.tmp
 *.bak
 *.log
+Fix_Team_Framework.md
+Development_Team_Framework.md

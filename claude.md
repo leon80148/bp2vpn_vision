@@ -1,5 +1,14 @@
 # BP2VPN Vision - 血壓資料匯出系統專案說明
 
+## Agent 團隊開發框架
+
+### 新功能開發
+當接收到開發或編寫新功能相關的指令後，請依照 `.claude/Development_Team_Framework.md` 裡面的規範透過 agent 團隊來完成任務。
+
+### Bug 修復和問題解決
+當接收到修改或解決 bug 問題相關的指令後，請依照 `.claude/Fix_Team_Framework.md` 裡面的規範透過 agent 團隊來完成任務。
+
+
 ## 專案概述
 這是一個醫療資料處理系統，專門用於將 DBF 格式的病患血壓資料轉換為符合健保署規範的 XML 格式。
 
