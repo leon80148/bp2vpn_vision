@@ -672,7 +672,7 @@ class UltraMainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # 標題
-        title_label = QLabel("壓紀錄批次檔生成器 v2.0")
+        title_label = QLabel("血壓紀錄批次檔生成器 v2.0")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
