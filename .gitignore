@@ -9,12 +9,9 @@ env/
 ENV/
 .venv
 
-# 敏感資料檔案
-data/*.DBF
-data/*.dbf
-totfa.xml
-data_schema.md
-*.odt
+# 敏感資料檔案 - 完全排除 data/ 資料夾
+data/
+!data/.gitkeep
 
 # 輸出檔案
 blood_pressure_export.xml
