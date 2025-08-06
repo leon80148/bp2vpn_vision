@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-BP2VPN Vision v2.0 Ultra版 - 超級優化版本
+BP2VPN Vision v2.0
 """
 
 import sys
@@ -37,22 +37,29 @@ class UltraBloodPressureLoader(QObject):
     progress = Signal(int, int)
     finished = Signal(dict)
     
-    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: int = 3):
+    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = 1.0):
         super().__init__()
         self.co18h_path = co18h_path
         self.patient_set = {pid.strip().zfill(7) for pid in patient_ids}
         self.years_limit = years_limit
         
     def load(self):
-        """超級優化的載入演算法"""
+        """優化的載入演算法"""
         try:
             # 計算日期限制
             today = datetime.now()
-            date_limit = today - timedelta(days=self.years_limit * 365)
-            date_limit_tw = date_limit.year - 1911
-            date_limit_str = f"{date_limit_tw:03d}0101"
             
-            print(f"Ultra載入: {len(self.patient_set)} 位病患, 日期限制: {date_limit_str}")
+            # 根據不同時間範圍計算日期限制
+            if self.years_limit == 0.1:  # 今年
+                date_limit = datetime(today.year, 1, 1)  # 今年1月1日
+            else:
+                days = int(self.years_limit * 365)
+                date_limit = today - timedelta(days=days)
+            
+            date_limit_tw = date_limit.year - 1911
+            date_limit_str = f"{date_limit_tw:03d}{date_limit.month:02d}{date_limit.day:02d}"
+            
+            print(f"載入: {len(self.patient_set)} 位病患, 日期限制: {date_limit_str}")
             
             # 使用字典快速儲存每個病患的最新血壓
             bp_data = {}
@@ -76,7 +83,7 @@ class UltraBloodPressureLoader(QObject):
             last_emit = time.time()
             batch_size = 1000  # 批次處理
             
-            print(f"開始Ultra掃描 {total_records} 筆記錄...")
+            print(f"開始掃描 {total_records} 筆記錄...")
             
             for record in table:
                 # 批次更新進度，減少UI更新頻率
@@ -164,7 +171,7 @@ class UltraBloodPressureLoader(QObject):
                         'value': None
                     }
             
-            print(f"Ultra掃描完成！")
+            print(f"掃描完成！")
             print(f"- 總記錄: {total_records}")
             print(f"- BP記錄: {bp_found}")
             print(f"- 匹配病患: {patients_with_bp}")
@@ -172,7 +179,7 @@ class UltraBloodPressureLoader(QObject):
             self.finished.emit(final_data)
             
         except Exception as e:
-            print(f"Ultra載入錯誤: {e}")
+            print(f"載入錯誤: {e}")
             self.finished.emit({})
 
 
@@ -253,7 +260,7 @@ class UltraPatientTableWidget(QTableWidget):
         self.populate_table()
     
     def populate_table(self):
-        """填充表格 - Ultra版本"""
+        """填充表格"""
         self._updating = True
         
         # 先完全清空表格
@@ -484,11 +491,11 @@ class UltraPatientTableWidget(QTableWidget):
 
 
 class UltraLoadingThread(QThread):
-    """Ultra載入執行緒"""
+    """載入執行緒"""
     progress = Signal(int, int)
     finished = Signal(dict)
     
-    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: int = 3):
+    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = 1.0):
         super().__init__()
         self.loader = UltraBloodPressureLoader(co18h_path, patient_ids, years_limit)
         self.loader.progress.connect(self.progress.emit)
@@ -499,7 +506,7 @@ class UltraLoadingThread(QThread):
 
 
 class UltraMainWindow(QMainWindow):
-    """Ultra主視窗"""
+    """主視窗"""
     
     def __init__(self):
         super().__init__()
@@ -508,7 +515,7 @@ class UltraMainWindow(QMainWindow):
         
     def setup_ui(self):
         """設定介面"""
-        self.setWindowTitle("BP2VPN Vision v2.0 - Ultra優化版")
+        self.setWindowTitle("BP2VPN Vision v2.0")
         self.setGeometry(100, 100, 1200, 800)
         
         central_widget = QWidget()
@@ -517,7 +524,7 @@ class UltraMainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # 標題
-        title_label = QLabel("血壓資料匯出系統 - Ultra優化版")
+        title_label = QLabel("血壓資料匯出系統優化版")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
@@ -526,7 +533,7 @@ class UltraMainWindow(QMainWindow):
         layout.addWidget(title_label)
         
         # 特色說明
-        feature_label = QLabel("✓ 有血壓資料自動勾選 ✓ 輸入血壓後自動勾選 ✓ 超級優化算法 ✓ 只顯示最新記錄")
+        feature_label = QLabel("先輸入選擇資料範圍，再選擇資料夾")
         feature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         feature_label.setStyleSheet("color: #059669; font-weight: bold;")
         layout.addWidget(feature_label)
@@ -544,8 +551,8 @@ class UltraMainWindow(QMainWindow):
         # 時間範圍
         button_layout1.addWidget(QLabel("資料範圍:"))
         self.years_combo = QComboBox()
-        self.years_combo.addItems(["1年內", "2年內", "3年內", "5年內", "全部"])
-        self.years_combo.setCurrentText("3年內")
+        self.years_combo.addItems(["今年", "三個月內", "半年內", "一年內"])
+        self.years_combo.setCurrentText("一年內")
         button_layout1.addWidget(self.years_combo)
         
         self.select_all_btn = QPushButton("全選")
@@ -631,7 +638,7 @@ class UltraMainWindow(QMainWindow):
             if co18h_path.exists():
                 # 有CO18H檔案，使用Ultra載入血壓資料
                 years_text = self.years_combo.currentText()
-                years_limit = {"1年內": 1, "2年內": 2, "3年內": 3, "5年內": 5, "全部": 10}[years_text]
+                years_limit = {"今年": 0.1, "三個月內": 0.25, "半年內": 0.5, "一年內": 1.0}[years_text]
                 self.load_blood_pressure_ultra(str(co18h_path), patient_ids, years_limit)
             else:
                 # 沒有CO18H檔案，手動填充表格
@@ -647,9 +654,10 @@ class UltraMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "載入錯誤", f"載入資料時發生錯誤:\\n{str(e)}")
     
-    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: int):
-        """Ultra血壓載入"""
-        self.status_bar.showMessage(f"Ultra載入中 - {years_limit}年內血壓資料...")
+    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: float):
+        """血壓載入"""
+        range_text = {0.1: "今年", 0.25: "三個月內", 0.5: "半年內", 1.0: "一年內"}.get(years_limit, f"{years_limit}年內")
+        self.status_bar.showMessage(f"載入中 - {range_text}血壓資料...")
         self.progress_bar.setVisible(True)
         self.select_folder_btn.setEnabled(False)
         
@@ -662,7 +670,7 @@ class UltraMainWindow(QMainWindow):
         """更新進度"""
         percent = int(current * 100 / total) if total > 0 else 0
         self.progress_bar.setValue(percent)
-        self.status_bar.showMessage(f"Ultra掃描中... {current}/{total} ({percent}%)")
+        self.status_bar.showMessage(f"掃描中... {current}/{total} ({percent}%)")
     
     def on_loading_finished(self, bp_data: dict):
         """載入完成"""
@@ -678,20 +686,20 @@ class UltraMainWindow(QMainWindow):
         
         QMessageBox.information(
             self,
-            "Ultra載入完成",
-            f"Ultra優化載入完成!\\n\\n"
-            f"📊 病患總數: {total} 筆\\n"
-            f"💉 有血壓記錄: {with_bp} 筆\\n"
-            f"☑️ 自動選擇: {auto_selected} 筆\\n\\n"
-            f"✨ 特色功能已啟用:\\n"
-            f"• 有血壓資料的病患已自動勾選\\n"
-            f"• 輸入血壓值後會自動勾選\\n"
+            "載入完成",
+            f"優化載入完成!\n"
+            f"📊 病患總數: {total} 筆\n"
+            f"💉 有血壓記錄: {with_bp} 筆\n"
+            f"☑️ 自動選擇: {auto_selected} 筆\n"
+            f"✨ 特色功能已啟用:\n"
+            f"• 有血壓資料的病患已自動勾選\n"
+            f"• 輸入血壓值後會自動勾選\n"
             f"• 只顯示每位病患的最新記錄"
         )
         
         self.enable_controls()
         self.update_stats()
-        self.status_bar.showMessage("Ultra就緒 - 可以開始操作")
+        self.status_bar.showMessage("就緒 - 可以開始操作")
     
     def enable_controls(self):
         """啟用控制項"""
@@ -768,7 +776,7 @@ class UltraMainWindow(QMainWindow):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "儲存XML檔案",
-            f"bp_ultra_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml",
+            "TOTFA.xml",
             "XML檔案 (*.xml)"
         )
         
@@ -780,71 +788,95 @@ class UltraMainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "匯出成功",
-                f"✅ Ultra匯出成功!\\n\\n"
-                f"📁 檔案: {Path(filename).name}\\n"
-                f"📊 匯出: {len(export_data)} 筆血壓資料\\n"
+                f"✅ 匯出成功!\n"
+                f"📁 檔案: {Path(filename).name}\n"
+                f"📊 匯出: {len(export_data)} 筆血壓資料\n"
                 f"📋 格式: 健保署XML規範"
             )
-            self.status_bar.showMessage(f"Ultra匯出完成 - {len(export_data)} 筆資料")
+            self.status_bar.showMessage(f"匯出完成 - {len(export_data)} 筆資料")
             
         except Exception as e:
             QMessageBox.critical(self, "匯出錯誤", f"匯出失敗:\\n{str(e)}")
     
     def write_xml(self, data: List[Dict], filename: str):
-        """寫入XML"""
-        import xml.etree.ElementTree as ET
-        from xml.dom import minidom
+        """寫入XML - 符合健保署规范"""
+        from datetime import datetime
         
-        root = ET.Element('patient')
+        # 生成符合健保署規範的XML內容
+        xml_lines = []
+        xml_lines.append('<?xml version="1.0" encoding="Big5"?>')
+        xml_lines.append('<patient>')
         
         for patient in data:
-            hdata = ET.SubElement(root, 'hdata')
+            xml_lines.append('  <hdata>')
             
-            ET.SubElement(hdata, 'h1').text = '1'
-            ET.SubElement(hdata, 'h2').text = '3522013684'
-            ET.SubElement(hdata, 'h3').text = '11'
-            ET.SubElement(hdata, 'h4').text = patient.get('bp_date', '')[:5]
-            ET.SubElement(hdata, 'h5').text = f"{patient.get('bp_date', '')}{patient.get('bp_time', '')}"
-            ET.SubElement(hdata, 'h6').text = '01'
-            ET.SubElement(hdata, 'h7').text = '0023'
-            ET.SubElement(hdata, 'h8').text = '1'
+            # h1-h22 基本資料段 (按照規範顺序)
+            xml_lines.append('    <h1>1</h1>')  # 報告類別(檢體檢驗報告)
+            xml_lines.append('    <h2>3522013684</h2>')  # 醫事機構代碼
+            xml_lines.append('    <h3>11</h3>')  # 醫事類別
             
-            if patient.get('pat_id'):
-                ET.SubElement(hdata, 'h9').text = patient['pat_id']
+            # h4 費用年月 (民國年YYMM)
+            current_date = datetime.now()
+            tw_year = current_date.year - 1911
+            h4_value = f"{tw_year:03d}{current_date.month:02d}"
+            xml_lines.append(f'    <h4>{h4_value}</h4>')
             
-            ET.SubElement(hdata, 'h10').text = patient['pat_pid'].zfill(7)
-            ET.SubElement(hdata, 'h11').text = patient.get('bp_date', '')
+            # h5 健保卡過卡日期時間 (YYYYMMDDHHMISS)
+            current_datetime = datetime.now()
+            tw_year_full = current_datetime.year - 1911
+            h5_value = f"{tw_year_full:03d}{current_datetime.month:02d}{current_datetime.day:02d}{current_datetime.hour:02d}{current_datetime.minute:02d}{current_datetime.second:02d}"
+            xml_lines.append(f'    <h5>{h5_value}</h5>')
             
-            if patient.get('pat_namec'):
-                ET.SubElement(hdata, 'h22').text = patient['pat_namec']
+            xml_lines.append('    <h6>01</h6>')  # 就醫類別(門診)
+            xml_lines.append('    <h7>0023</h7>')  # 就醫序號(血壓檢驗項目代碼)
+            xml_lines.append('    <h8>1</h8>')   # 補卡註記
             
-            # 收縮壓
+            # h9 身分證統一編號 (非必填)
+            if patient.get('pat_id') and patient['pat_id'].strip():
+                xml_lines.append(f'    <h9>{patient["pat_id"]}</h9>')
+            
+            # h10 病歷號 (7位數)
+            xml_lines.append(f'    <h10>{patient["pat_pid"].zfill(7)}</h10>')
+            
+            # h11 檢驗日期 (民國年YYYMMDD)
+            current_date = datetime.now()
+            tw_year = current_date.year - 1911
+            h11_value = f"{tw_year:03d}{current_date.month:02d}{current_date.day:02d}"
+            xml_lines.append(f'    <h11>{h11_value}</h11>')
+            
+            # h22 病患姓名 (非必填)
+            if patient.get('pat_namec') and patient['pat_namec'].strip():
+                xml_lines.append(f'    <h22>{patient["pat_namec"]}</h22>')
+            
+            # 報告資料段 - 收縮壓
             if patient.get('systolic', 0) > 0:
-                rdata1 = ET.SubElement(hdata, 'rdata')
-                ET.SubElement(rdata1, 'r1').text = '1'
-                ET.SubElement(rdata1, 'r2').text = '收縮壓'
-                ET.SubElement(rdata1, 'r3').text = '生理量測血壓(OBPM)'
-                ET.SubElement(rdata1, 'r4').text = str(patient['systolic'])
-                ET.SubElement(rdata1, 'r5').text = 'mmHg'
-                ET.SubElement(rdata1, 'r6-1').text = '90-130'
+                xml_lines.append('    <rdata>')
+                xml_lines.append('      <r1>1</r1>')  # 報告序號
+                xml_lines.append('      <r2>收縮壓</r2>')  # 檢驗項目名稱
+                xml_lines.append('      <r3>生理量測血壓(OBPM)</r3>')  # 檢驗方法
+                xml_lines.append(f'      <r4>{patient["systolic"]}</r4>')  # 檢驗報告結果值
+                xml_lines.append('      <r5>mmHg</r5>')  # 單位
+                xml_lines.append('      <r6-1>90-130</r6-1>')  # 參考值
+                xml_lines.append('    </rdata>')
             
-            # 舒張壓
+            # 報告資料段 - 舒張壓
             if patient.get('diastolic', 0) > 0:
-                rdata2 = ET.SubElement(hdata, 'rdata')
-                ET.SubElement(rdata2, 'r1').text = '2'
-                ET.SubElement(rdata2, 'r2').text = '舒張壓'
-                ET.SubElement(rdata2, 'r3').text = '生理量測血壓(OBPM)'  
-                ET.SubElement(rdata2, 'r4').text = str(patient['diastolic'])
-                ET.SubElement(rdata2, 'r5').text = 'mmHg'
-                ET.SubElement(rdata2, 'r6-1').text = '60-80'
+                xml_lines.append('    <rdata>')
+                xml_lines.append('      <r1>2</r1>')  # 報告序號
+                xml_lines.append('      <r2>舒張壓</r2>')  # 檢驗項目名稱
+                xml_lines.append('      <r3>生理量測血壓(OBPM)</r3>')  # 檢驗方法
+                xml_lines.append(f'      <r4>{patient["diastolic"]}</r4>')  # 檢驗報告結果值
+                xml_lines.append('      <r5>mmHg</r5>')  # 單位
+                xml_lines.append('      <r6-1>60-80</r6-1>')  # 參考值
+                xml_lines.append('    </rdata>')
+            
+            xml_lines.append('  </hdata>')
         
-        xml_str = ET.tostring(root, encoding='big5')
-        dom = minidom.parseString(xml_str)
+        xml_lines.append('</patient>')
         
-        with open(filename, 'w', encoding='big5') as f:
-            f.write('<?xml version="1.0" encoding="Big5"?>\\n')
-            pretty_xml = dom.documentElement.toprettyxml(indent='  ')
-            f.write(pretty_xml)
+        # 寫入檔案 (Big5編碼)
+        with open(filename, 'w', encoding='big5', errors='ignore') as f:
+            f.write('\n'.join(xml_lines))
     
     def closeEvent(self, event):
         """關閉事件"""
@@ -968,17 +1000,11 @@ def main():
     
     QTimer.singleShot(800, lambda: QMessageBox.information(
         window,
-        "🚀 BP2VPN Vision Ultra版",
-        "🎯 血壓資料匯出系統 - Ultra優化版\\n\\n"
-        "⚡ Ultra特色功能:\\n"
-        "✅ 有血壓資料自動勾選\\n"
-        "✅ 輸入血壓後自動勾選\\n"
-        "✅ 超級優化載入算法\\n"
-        "✅ 只保留最新一筆記錄\\n"
-        "✅ 批次處理提升效能\\n\\n"
-        "🎨 操作提示:\\n"
-        "• 有血壓的病患會自動勾選\\n"
-        "• 輸入血壓值會自動勾選該病患\\n"
+        "🚀 BP2VPN Vision",
+        "🎯 血壓資料匯出系統\n\n"
+        "🎨 操作提示:\n"
+        "• 有血壓的病患會自動勾選\n"
+        "• 輸入血壓值會自動勾選該病患\n"
         "• 綠色=已測量，黃色=待輸入"
     ))
     
