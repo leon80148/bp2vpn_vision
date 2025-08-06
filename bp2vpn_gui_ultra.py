@@ -1485,21 +1485,44 @@ def main():
         }
     """)
     
-    window = UltraMainWindow()
-    window.show()
-    
-    QTimer.singleShot(800, lambda: QMessageBox.information(
-        window,
-        "🚀 BP2VPN Vision",
-        "🎯 血壓資料匯出系統\n\n"
-        "🎨 操作提示:\n"
-        "• 有血壓的病患會自動勾選\n"
-        "• 輸入血壓值會自動勾選該病患\n"
-        "• 綠色=已測量，黃色=待輸入"
-    ))
-    
-    return app.exec()
+    try:
+        window = UltraMainWindow()
+        window.show()
+        
+        QTimer.singleShot(800, lambda: QMessageBox.information(
+            window,
+            "🚀 BP2VPN Vision",
+            "🎯 血壓資料匯出系統\n\n"
+            "🎨 操作提示:\n"
+            "• 有血壓的病患會自動勾選\n"
+            "• 輸入血壓值會自動勾選該病患\n"
+            "• 綠色=已測量，黃色=待輸入"
+        ))
+        
+        return app.exec()
+    except Exception as e:
+        import traceback
+        error_msg = f"視窗初始化錯誤: {str(e)}\n\n詳細錯誤信息:\n{traceback.format_exc()}"
+        print(error_msg)
+        QMessageBox.critical(None, "程式錯誤", error_msg)
+        return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:
+        import traceback
+        error_msg = f"程式啟動錯誤: {str(e)}\n\n詳細錯誤信息:\n{traceback.format_exc()}"
+        print(error_msg)
+        
+        # 嘗試顯示圖形化錯誤訊息
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            if not QApplication.instance():
+                app = QApplication(sys.argv)
+            QMessageBox.critical(None, "程式錯誤", error_msg)
+        except:
+            pass
+        
+        sys.exit(1)
