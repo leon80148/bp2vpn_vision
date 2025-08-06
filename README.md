@@ -1,115 +1,152 @@
-# 血壓資料匯出系統
+# 血壓紀錄批次檔生成器_for展望系統 v2.0 Ultra
 
-這個系統可以從 DBF 檔案中讀取病患的血壓資料，並轉換成符合健保署規範的 XML 格式。
+> 📖 **[點擊這裡查看詳細操作說明](操作說明.md)**
 
-## 系統需求
+將 DBF 格式的病患血壓資料快速轉換為符合健保署規範的 XML 格式。支援大量資料處理和 ZIP 壓縮匯出。
 
-- Python 3.6 或以上版本
-- 必要套件：`dbf`
 
-## 安裝
+## 🔧 系統需求
 
-### Windows 環境
+- **作業系統**: Windows 10/11 (64位元)
+- **記憶體**: 建議 4GB RAM 以上
+- **Python**: 3.8+ (開發時需要)
+- **儲存空間**: 500MB 可用空間
 
-1. 執行安裝腳本：
-```cmd
-setup_venv.bat
-```
+## 🚀 快速開始
 
-2. 或手動安裝：
-```cmd
-python -m venv venv
-venv\Scripts\activate.bat
-pip install -r requirements.txt
-```
+### 方式一：使用編譯好的執行檔（推薦）
+1. 下載最新的 [Release 版本](../../releases)
+2. 解壓縮到任意資料夾
+3. 將 DBF 檔案放入 `data/` 資料夾
+4. 雙擊 `BP2VPN_Vision.exe` 啟動
 
-### Mac/Linux 環境
-
-1. 建立虛擬環境：
+### 方式二：從原始碼建置
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# 1. 複製專案
+git clone https://github.com/你的用戶名/bp2vpn_vision.git
+cd bp2vpn_vision
+
+# 2. 建立執行檔
+build_executable.bat
+
+# 3. 建立分發包
+create_installer.bat
 ```
 
-## 檔案說明
+## 📁 檔案結構
 
-- `bp_export_system.py` - 核心匯出邏輯
-- `bp_export_cli.py` - 命令列介面
-- `patient_list_example.txt` - 病歷號列表範例
-- `data/` - DBF 資料檔案目錄
-  - `CO01M.DBF` - 病患基本資料
-  - `CO18H.DBF` - 檢驗歷史資料（包含血壓）
+```
+bp2vpn_vision/
+├── bp2vpn_gui_ultra.py        # 主程式
+├── build_executable.bat       # 建置腳本
+├── create_installer.bat       # 分發包建置
+├── BUILD_GUIDE.md             # 建置說明
+├── XML_RULE.md               # XML 格式說明
+├── 操作說明.md                # 使用者操作指南
+├── data/                     # DBF 資料檔案目錄
+│   ├── VISHFAM.DBF          # 病患名單主檔 ⭐主要來源
+│   ├── CO18H.DBF            # 檢驗歷史資料（血壓記錄）
+│   └── CO01M.DBF            # 病患基本資料（出生日期）
+└── release/                 # 分發包輸出目錄
+```
 
-## 使用方式
+## 💡 使用方式
 
-### 1. 匯出單一病患
+### GUI 操作（推薦）
+1. **啟動程式**: 雙擊 `BP2VPN_Vision.exe`
+2. **填入醫事機構代碼**: 必填的 10 碼代碼
+3. **選擇資料範圍**: 今年/三個月內/半年內/一年內
+4. **選擇資料夾**: 點擊「選擇資料夾」，指向包含 DBF 檔案的目錄
+5. **檢視資料**: 系統自動載入並顯示病患名單和血壓資料
+6. **編輯血壓值**: 可直接在表格中修改收縮壓和舒張壓
+7. **選擇匯出格式**: 
+   - 純 XML 檔案
+   - ZIP 壓縮檔案（包含 XML + 說明文件）
+8. **完成匯出**: 檔案將儲存到指定位置
+
+詳細操作步驟請參考 **[操作說明.md](操作說明.md)**
+
+### 開發者模式
 ```bash
-python bp_export_cli.py -p 0480319
+# 執行原始碼版本
+python bp2vpn_gui_ultra.py
+
+# 建立執行檔
+build_executable.bat
+
+# 建立分發包  
+create_installer.bat
 ```
 
-### 2. 匯出多個病患
-```bash
-python bp_export_cli.py -p 0480319 0860718 1234567
-```
+## 📊 資料處理邏輯
 
-### 3. 從檔案讀取病歷號列表
-```bash
-python bp_export_cli.py -f patient_list_example.txt
-```
+1. **資料來源優先順序**:
+   - 主要來源: `VISHFAM.DBF` (病患名單)
+   - 血壓資料: `CO18H.DBF` (HITEM='BP', HVAL='130/80')
+   - 補充資料: `CO01M.DBF` (出生日期)
 
-### 4. 指定輸出檔案名稱
-```bash
-python bp_export_cli.py -p 0480319 -o my_blood_pressure.xml
-```
+2. **智慧處理功能**:
+   - 自動解析血壓格式: "130/80" → 收縮壓130、舒張壓80
+   - 去除重複記錄: 每位病患只保留最新血壓數據
+   - 自動勾選: 有血壓資料的病患會自動選取
+   - 日期篩選: 根據選擇的時間範圍過濾資料
 
-### 5. 顯示詳細執行訊息
-```bash
-python bp_export_cli.py -p 0480319 -v
-```
+## 📋 輸出格式
 
-## 病歷號格式
+### XML 規範
+- 符合健保署「特約醫事服務機構每日上傳檢驗(查)結果」格式
+- Big5 編碼，包含完整的 h1~h26 標籤
+- 每位病患包含收縮壓和舒張壓兩筆 rdata 記錄
 
-- 系統會自動將病歷號格式化為 7 位數
-- 不足 7 位會在左側補零
-- 例如：`480319` 會被轉換為 `0480319`
+### ZIP 壓縮檔案包含
+- XML 檔案（健保署規範格式，已壓縮）
 
-## 輸出格式
+## ⚠️ 重要注意事項
 
-輸出的 XML 檔案符合健保署規範，包含：
-- 病患基本資訊
-- 血壓測量記錄（收縮壓/舒張壓配對）
-- 測量時間、數值、單位、參考值範圍
+### 資料安全
+- DBF 檔案包含敏感病患資料，請妥善保管
+- 輸出的 XML/ZIP 檔案含個人資料，需符合醫療隱私法規
+- 建議定期清理暫存和輸出檔案
 
-## 注意事項
+### 系統限制
+- 病歷號自動格式化為 7 位數（不足左補零）
+- 日期使用民國年格式（西元年-1911）
+- 主要支援 Windows 環境，建議 4GB 記憶體以上
 
-1. DBF 檔案必須放在 `data/` 目錄下
-2. 輸出檔案編碼為 Big5（符合健保署要求）
-3. 系統會自動配對同時間測量的收縮壓和舒張壓
-4. 如果找不到病患資料或血壓記錄，會在日誌中顯示警告
+## 🔧 故障排除
 
-## 故障排除
+### 常見問題
 
-### 問題：找不到 DBF 檔案
-確認 `data/` 目錄下有 `CO01M.DBF` 和 `CO18H.DBF` 檔案。
+**Q: 程式無法啟動**
+- 確認是 Windows 10/11 64位元系統
+- 檢查防毒軟體是否阻擋執行檔
+- 嘗試以系統管理員身分執行
 
-### 問題：編碼錯誤
-確認 DBF 檔案的編碼格式，本系統預設處理 Big5 編碼。
+**Q: 找不到 DBF 檔案**  
+- 確認 data/ 資料夾包含必要的 DBF 檔案
+- 檢查檔案名稱大小寫是否正確
 
-### 問題：找不到病患資料
-檢查病歷號是否正確，系統會自動格式化為 7 位數。
+**Q: 載入資料時程式當機**
+- 檢查可用記憶體是否足夠（建議4GB+）
+- 嘗試選擇較短的日期範圍
 
-## 程式化使用
+**Q: 匯出時提示醫事機構代碼錯誤**
+- 確認已填入正確的 10 碼醫事機構代碼
+- 不可留空或使用預設值
 
-您也可以在自己的 Python 程式中使用：
+## 📚 相關文檔
 
-```python
-from bp_export_system import BloodPressureExporter
+- **[操作說明.md](操作說明.md)** - 詳細的使用者操作指南
+- **[BUILD_GUIDE.md](BUILD_GUIDE.md)** - 開發者建置說明  
+- **[XML_RULE.md](XML_RULE.md)** - XML 匯出格式規範
+- **[CLAUDE.md](CLAUDE.md)** - 專案技術文檔
 
-# 建立匯出器
-exporter = BloodPressureExporter(data_path="data")
+## 🆔 版本資訊
 
-# 匯出病患血壓資料
-patient_list = ["0480319", "0860718"]
-exporter.export_to_xml(patient_list, "output.xml")
-```
+- **目前版本**: v2.0 Ultra
+- **更新日期**: 2024年
+- **主要改進**: GUI介面、效能優化、ZIP壓縮、智慧選取
+
+## 📄 授權條款
+
+本專案僅供醫療機構內部使用，處理病患資料時請遵循相關法規。

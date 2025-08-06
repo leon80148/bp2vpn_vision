@@ -11,13 +11,15 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Set
 import time
 from collections import defaultdict
+import zipfile
 
 try:
     from PySide6.QtWidgets import (QApplication, QMessageBox, QMainWindow, QVBoxLayout, 
                                    QWidget, QPushButton, QLabel, QFileDialog, QTableWidget, 
                                    QTableWidgetItem, QHeaderView, QCheckBox, QHBoxLayout, 
-                                   QLineEdit, QStatusBar, QProgressBar, QSpinBox, QComboBox)
-    from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject
+                                   QLineEdit, QStatusBar, QProgressBar, QSpinBox, QComboBox,
+                                   QDateEdit, QButtonGroup, QRadioButton)
+    from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject, QDate
     from PySide6.QtGui import QFont, QColor, QBrush
 except ImportError as e:
     print(f"錯誤: 無法匯入PySide6: {e}")
@@ -37,11 +39,13 @@ class UltraBloodPressureLoader(QObject):
     progress = Signal(int, int)
     finished = Signal(dict)
     
-    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = 1.0):
+    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         super().__init__()
         self.co18h_path = co18h_path
         self.patient_set = {pid.strip().zfill(7) for pid in patient_ids}
         self.years_limit = years_limit
+        self.start_date = start_date
+        self.end_date = end_date
         
     def load(self):
         """優化的載入演算法"""
@@ -49,41 +53,81 @@ class UltraBloodPressureLoader(QObject):
             # 計算日期限制
             today = datetime.now()
             
-            # 根據不同時間範圍計算日期限制
-            if self.years_limit == 0.1:  # 今年
-                date_limit = datetime(today.year, 1, 1)  # 今年1月1日
+            if self.years_limit is not None:
+                # 預設範圍模式
+                if self.years_limit == 0.1:  # 今年
+                    date_limit = datetime(today.year, 1, 1)  # 今年1月1日
+                else:
+                    days = int(self.years_limit * 365)
+                    date_limit = today - timedelta(days=days)
+                
+                date_limit_tw = date_limit.year - 1911
+                date_limit_str = f"{date_limit_tw:03d}{date_limit.month:02d}{date_limit.day:02d}"
+                
+                print(f"載入: {len(self.patient_set)} 位病患")
+                print(f"今天: {today.strftime('%Y-%m-%d')} (民國{today.year-1911}年)")
+                print(f"時間範圍參數: {self.years_limit}")
+                if self.years_limit == 0.1:
+                    print(f"使用今年模式 -> {date_limit.strftime('%Y-%m-%d')}")
+                else:
+                    days = int(self.years_limit * 365)
+                    print(f"往前推{days}天 -> {date_limit.strftime('%Y-%m-%d')}")
+                print(f"日期限制字串: {date_limit_str}")
+                
+                # 結束日期設為今天
+                end_date_limit = today
+                end_date_tw = end_date_limit.year - 1911
+                end_date_str = f"{end_date_tw:03d}{end_date_limit.month:02d}{end_date_limit.day:02d}"
             else:
-                days = int(self.years_limit * 365)
-                date_limit = today - timedelta(days=days)
-            
-            date_limit_tw = date_limit.year - 1911
-            date_limit_str = f"{date_limit_tw:03d}{date_limit.month:02d}{date_limit.day:02d}"
-            
-            print(f"載入: {len(self.patient_set)} 位病患, 日期限制: {date_limit_str}")
+                # 自訂區間模式
+                date_limit = datetime.combine(self.start_date, datetime.min.time())
+                end_date_limit = datetime.combine(self.end_date, datetime.max.time())
+                
+                date_limit_tw = date_limit.year - 1911
+                date_limit_str = f"{date_limit_tw:03d}{date_limit.month:02d}{date_limit.day:02d}"
+                
+                end_date_tw = end_date_limit.year - 1911
+                end_date_str = f"{end_date_tw:03d}{end_date_limit.month:02d}{end_date_limit.day:02d}"
+                
+                print(f"載入: {len(self.patient_set)} 位病患")
+                print(f"自訂日期區間: {self.start_date.strftime('%Y-%m-%d')} ~ {self.end_date.strftime('%Y-%m-%d')}")
+                print(f"起始日期限制字串: {date_limit_str}")
+                print(f"結束日期限制字串: {end_date_str}")
             
             # 使用字典快速儲存每個病患的最新血壓
             bp_data = {}
+            patients_found = 0  # 已找到血壓記錄的病患數量
+            target_patients = len(self.patient_set)
+            
             for pid in self.patient_set:
                 bp_data[pid] = {
                     'systolic': None,
                     'diastolic': None,
                     'date': None,
                     'time': None,
+                    'hdate': None,  # 保存原始日期格式
+                    'htime': None,  # 保存原始時間格式
                     'value': None,
-                    'datetime_str': ''
+                    'datetime_str': '',
+                    'found': False  # 是否已找到該病患的血壓記錄
                 }
             
             table = dbf.Table(self.co18h_path)
             table.open()
             
             processed = 0
+            date_filtered = 0  # 通過日期篩選的記錄數
             bp_found = 0
+            patient_matched = 0  # 病患匹配的記錄數
             matched = 0
             total_records = len(table)
             last_emit = time.time()
             batch_size = 1000  # 批次處理
             
-            print(f"開始掃描 {total_records} 筆記錄...")
+            print(f"開始掃描 {total_records} 筆記錄，日期限制: {date_limit_str}...")
+            
+            # 記錄前幾筆的日期資料作為參考
+            sample_dates = []
             
             for record in table:
                 # 批次更新進度，減少UI更新頻率
@@ -94,22 +138,42 @@ class UltraBloodPressureLoader(QObject):
                 processed += 1
                 
                 try:
-                    # 快速篩選：優先檢查HITEM
+                    # 第一級篩選：日期範圍（最能快速排除大量記錄）
+                    # 優化：先快速檢查日期格式，避免不必要的字串操作
+                    try:
+                        record_date = str(record.HDATE).strip()
+                        
+                        # 收集前10筆記錄的日期作為參考
+                        if len(sample_dates) < 10:
+                            sample_dates.append(record_date)
+                        
+                        if len(record_date) < 7:
+                            continue
+                        # 快速字串比較，避免複雜的日期解析
+                        if record_date < date_limit_str:
+                            continue
+                        
+                        # 自訂區間模式需要檢查結束日期
+                        if self.years_limit is None and record_date > end_date_str:
+                            continue
+                    except:
+                        continue
+                    
+                    date_filtered += 1
+                    
+                    # 第二級篩選：檢查HITEM（只處理血壓記錄）
                     hitem = str(record.HITEM).strip()
                     if hitem != 'BP':
                         continue
                     
                     bp_found += 1
                     
-                    # 快速篩選：檢查病歷號
+                    # 第三級篩選：檢查病歷號（只處理目標病患）
                     patient_id = str(record.KCSTMR).strip().zfill(7)
                     if patient_id not in self.patient_set:
                         continue
-                    
-                    # 快速篩選：檢查日期
-                    record_date = str(record.HDATE).strip()
-                    if len(record_date) >= 7 and record_date < date_limit_str:
-                        continue
+                        
+                    patient_matched += 1
                     
                     # 解析血壓值
                     hval = str(record.HVAL).strip()
@@ -132,13 +196,23 @@ class UltraBloodPressureLoader(QObject):
                         # 只保留最新的記錄
                         patient_bp = bp_data[patient_id]
                         if not patient_bp['datetime_str'] or datetime_str > patient_bp['datetime_str']:
+                            # 如果是第一次找到該病患的血壓記錄
+                            if not patient_bp['found']:
+                                patient_bp['found'] = True
+                                patients_found += 1
+                            
                             patient_bp['systolic'] = systolic
                             patient_bp['diastolic'] = diastolic
                             patient_bp['date'] = record_date
                             patient_bp['time'] = time_str
+                            patient_bp['hdate'] = record_date  # 保存原始日期
+                            patient_bp['htime'] = time_str  # 保存原始時間
                             patient_bp['value'] = hval
                             patient_bp['datetime_str'] = datetime_str
                             matched += 1
+                        
+                        # 優化：如果已經找到所有病患的最新記錄，可以提早結束
+                        # （但通常我們還是要掃描完畢以確保真的是最新記錄）
                         
                     except (ValueError, IndexError):
                         continue
@@ -160,6 +234,8 @@ class UltraBloodPressureLoader(QObject):
                         'diastolic': data['diastolic'],
                         'date': data['date'],
                         'time': data['time'],
+                        'hdate': data.get('hdate', data['date']),
+                        'htime': data.get('htime', data['time']),
                         'value': data['value']
                     }
                 else:
@@ -168,13 +244,21 @@ class UltraBloodPressureLoader(QObject):
                         'diastolic': None,
                         'date': None,
                         'time': None,
+                        'hdate': None,
+                        'htime': None,
                         'value': None
                     }
             
-            print(f"掃描完成！")
+            print(f"掃描完成！篩選效果分析:")
             print(f"- 總記錄: {total_records}")
-            print(f"- BP記錄: {bp_found}")
-            print(f"- 匹配病患: {patients_with_bp}")
+            if sample_dates:
+                print(f"- 前10筆記錄日期樣本: {sample_dates}")
+            print(f"- 通過日期篩選: {date_filtered} ({date_filtered/total_records*100:.1f}%)")
+            if date_filtered > 0:
+                print(f"- BP記錄: {bp_found} ({bp_found/date_filtered*100:.1f}% of date filtered)")
+                if bp_found > 0:
+                    print(f"- 病患匹配: {patient_matched} ({patient_matched/bp_found*100:.1f}% of BP records)")
+            print(f"- 最終有血壓病患: {patients_with_bp}")
             
             self.finished.emit(final_data)
             
@@ -195,6 +279,7 @@ class UltraPatientTableWidget(QTableWidget):
         self.selected_patients = set()
         self.patient_data = []
         self.bp_data = {}
+        self.dbf_folder = ""  # 儲存DBF資料夾路徑
         self._updating = False  # 防止遞迴更新
         
     def setup_table(self):
@@ -218,16 +303,28 @@ class UltraPatientTableWidget(QTableWidget):
         """載入VISHFAM資料"""
         patients = []
         patient_ids = []
+        seen_pids = set()  # 用於去重
+        
+        # 設定DBF資料夾路徑
+        self.dbf_folder = os.path.dirname(vishfam_path)
         
         try:
             table = dbf.Table(vishfam_path)
             table.open()
+            total_records = len(table)
+            duplicates_found = 0
             
             for record in table:
                 try:
                     pat_pid = str(getattr(record, 'PAT_PID', '')).strip()
                     if not pat_pid or pat_pid == '0000000':
                         continue
+                    
+                    # 去重檢查
+                    if pat_pid in seen_pids:
+                        duplicates_found += 1
+                        continue
+                    seen_pids.add(pat_pid)
                     
                     patient = {
                         'pat_pid': pat_pid,
@@ -244,9 +341,13 @@ class UltraPatientTableWidget(QTableWidget):
             
             table.close()
             
-            print(f"VISHFAM loaded: {len(patients)} patients")
+            print(f"VISHFAM掃描完成:")
+            print(f"- 總記錄: {total_records}")
+            print(f"- 重複記錄: {duplicates_found}")
+            print(f"- 最終病患: {len(patients)}")
+            
             self.patient_data = patients
-            print(f"Patient data length after assignment: {len(self.patient_data)}")
+            print(f"Patient data assigned: {len(self.patient_data)} patients")
             # 不在這裡populate_table，等待血壓資料載入完成後再一起處理
             
         except Exception as e:
@@ -280,8 +381,15 @@ class UltraPatientTableWidget(QTableWidget):
             patient_id = patient['pat_pid']
             bp_info = self.bp_data.get(patient_id.zfill(7), {})
             
-            # 判斷是否有血壓資料
-            has_bp_data = bp_info.get('systolic') and bp_info.get('diastolic')
+            # 將血壓資料的時間資訊加入patient資料中
+            if bp_info:
+                patient['hdate'] = bp_info.get('hdate')
+                patient['htime'] = bp_info.get('htime')
+            
+            # 判斷是否有血壓資料 (必須收縮壓和舒張壓都大於0)
+            systolic = bp_info.get('systolic') or 0
+            diastolic = bp_info.get('diastolic') or 0
+            has_bp_data = (systolic > 0 and diastolic > 0)
             
             # 選擇框 - 如果有血壓資料則自動勾選
             checkbox = QCheckBox()
@@ -440,28 +548,68 @@ class UltraPatientTableWidget(QTableWidget):
                     status_item.setBackground(QBrush(QColor(240, 240, 240)))  # 灰色
     
     def get_export_data(self) -> List[Dict]:
-        """取得匯出資料"""
+        """取得匯出資料 - 完全基於GUI表單中的勾選狀態"""
         export_data = []
         
-        for row in range(self.rowCount()):
-            checkbox = self.cellWidget(row, 0)
-            if checkbox and checkbox.isChecked():
-                patient = self.patient_data[row].copy()
-                
-                systolic_spin = self.cellWidget(row, 4)
-                diastolic_spin = self.cellWidget(row, 5)
-                
-                if systolic_spin and diastolic_spin:
-                    systolic = systolic_spin.value()
-                    diastolic = diastolic_spin.value()
-                    
-                    if systolic > 0 or diastolic > 0:
-                        patient['systolic'] = systolic
-                        patient['diastolic'] = diastolic
-                        patient['bp_date'] = datetime.now().strftime("%Y%m%d")[2:]
-                        patient['bp_time'] = datetime.now().strftime("%H%M%S")
-                        export_data.append(patient)
+        print(f"開始檢查匯出資料，表格總行數: {self.rowCount()}")
         
+        # 遍歷表格中每一行，檢查勾選狀態
+        for row in range(self.rowCount()):
+            # 第一步：檢查是否勾選
+            checkbox = self.cellWidget(row, 0)
+            if not (checkbox and checkbox.isChecked()):
+                continue  # 跳過未勾選的行
+            
+            # 第二步：取得病患基本資料
+            if row >= len(self.patient_data):
+                print(f"警告：第{row}行超出病患資料範圍")
+                continue
+                
+            patient = self.patient_data[row].copy()
+            patient_id = patient['pat_pid'].strip().zfill(7)
+            
+            # 第三步：從GUI取得當前血壓值（以GUI顯示為準）
+            systolic_spin = self.cellWidget(row, 4)
+            diastolic_spin = self.cellWidget(row, 5)
+            
+            if not (systolic_spin and diastolic_spin):
+                print(f"警告：第{row}行血壓輸入框不存在")
+                continue
+            
+            # 取得GUI中的血壓值
+            systolic = systolic_spin.value()
+            diastolic = diastolic_spin.value()
+            
+            # 第四步：只匯出有完整血壓資料的病患
+            if systolic <= 0 or diastolic <= 0:
+                print(f"跳過第{row}行：血壓值不完整 (收縮壓:{systolic}, 舒張壓:{diastolic})")
+                continue
+                
+            # 第五步：設定血壓值和時間資訊
+            patient['systolic'] = systolic
+            patient['diastolic'] = diastolic
+            
+            # 取得血壓記錄的時間資訊
+            if patient_id in self.bp_data:
+                bp_info = self.bp_data[patient_id]
+                patient['hdate'] = bp_info.get('hdate', bp_info.get('date', ''))
+                patient['htime'] = bp_info.get('htime', bp_info.get('time', ''))
+            else:
+                # 若無血壓記錄，使用當前時間
+                current_date = datetime.now()
+                tw_year = current_date.year - 1911
+                patient['hdate'] = f"{tw_year:03d}{current_date.month:02d}{current_date.day:02d}"
+                patient['htime'] = f"{current_date.hour:02d}{current_date.minute:02d}{current_date.second:02d}"
+            
+            # 向下兼容的日期時間格式
+            patient['bp_date'] = patient.get('hdate', datetime.now().strftime("%Y%m%d")[2:])
+            patient['bp_time'] = patient.get('htime', datetime.now().strftime("%H%M%S"))
+            
+            # 加入匯出清單
+            export_data.append(patient)
+            print(f"第{row}行已加入匯出：{patient_id} (收縮壓:{systolic}, 舒張壓:{diastolic})")
+        
+        print(f"匯出資料準備完成，共{len(export_data)}筆")
         return export_data
     
     def select_all(self):
@@ -495,9 +643,9 @@ class UltraLoadingThread(QThread):
     progress = Signal(int, int)
     finished = Signal(dict)
     
-    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = 1.0):
+    def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         super().__init__()
-        self.loader = UltraBloodPressureLoader(co18h_path, patient_ids, years_limit)
+        self.loader = UltraBloodPressureLoader(co18h_path, patient_ids, years_limit, start_date, end_date)
         self.loader.progress.connect(self.progress.emit)
         self.loader.finished.connect(self.finished.emit)
     
@@ -524,7 +672,7 @@ class UltraMainWindow(QMainWindow):
         layout = QVBoxLayout(central_widget)
         
         # 標題
-        title_label = QLabel("血壓資料匯出系統優化版")
+        title_label = QLabel("壓紀錄批次檔生成器 v2.0")
         title_font = QFont()
         title_font.setPointSize(16)
         title_font.setBold(True)
@@ -533,7 +681,7 @@ class UltraMainWindow(QMainWindow):
         layout.addWidget(title_label)
         
         # 特色說明
-        feature_label = QLabel("先輸入選擇資料範圍，再選擇資料夾")
+        feature_label = QLabel("先選擇時間範圍，再輸入機構代碼，再選擇資料夾")
         feature_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         feature_label.setStyleSheet("color: #059669; font-weight: bold;")
         layout.addWidget(feature_label)
@@ -548,12 +696,64 @@ class UltraMainWindow(QMainWindow):
         self.select_folder_btn.clicked.connect(self.select_folder)
         button_layout1.addWidget(self.select_folder_btn)
         
-        # 時間範圍
-        button_layout1.addWidget(QLabel("資料範圍:"))
+        # 日期範圍選擇
+        date_range_layout = QVBoxLayout()
+        
+        # 日期範圍模式選擇
+        date_mode_layout = QHBoxLayout()
+        date_mode_layout.addWidget(QLabel("資料範圍:"))
+        
+        self.date_mode_group = QButtonGroup()
+        self.preset_radio = QRadioButton("預設範圍")
+        self.custom_radio = QRadioButton("自訂區間")
+        self.preset_radio.setChecked(True)  # 預設選擇預設範圍
+        
+        self.date_mode_group.addButton(self.preset_radio, 0)
+        self.date_mode_group.addButton(self.custom_radio, 1)
+        
+        # 連接信號
+        self.preset_radio.toggled.connect(self.on_date_mode_changed)
+        self.custom_radio.toggled.connect(self.on_date_mode_changed)
+        
+        date_mode_layout.addWidget(self.preset_radio)
+        date_mode_layout.addWidget(self.custom_radio)
+        date_range_layout.addLayout(date_mode_layout)
+        
+        # 預設範圍選擇器
+        preset_layout = QHBoxLayout()
         self.years_combo = QComboBox()
         self.years_combo.addItems(["今年", "三個月內", "半年內", "一年內"])
         self.years_combo.setCurrentText("一年內")
-        button_layout1.addWidget(self.years_combo)
+        preset_layout.addWidget(self.years_combo)
+        preset_layout.addStretch()
+        date_range_layout.addLayout(preset_layout)
+        
+        # 自訂日期區間選擇器
+        custom_layout = QHBoxLayout()
+        custom_layout.addWidget(QLabel("起始日期:"))
+        self.start_date = QDateEdit()
+        self.start_date.setDate(QDate.currentDate().addDays(-365))  # 預設一年前
+        self.start_date.setCalendarPopup(True)
+        self.start_date.setEnabled(False)  # 初始為禁用
+        custom_layout.addWidget(self.start_date)
+        
+        custom_layout.addWidget(QLabel("結束日期:"))
+        self.end_date = QDateEdit()
+        self.end_date.setDate(QDate.currentDate())  # 預設今天
+        self.end_date.setCalendarPopup(True)
+        self.end_date.setEnabled(False)  # 初始為禁用
+        custom_layout.addWidget(self.end_date)
+        custom_layout.addStretch()
+        date_range_layout.addLayout(custom_layout)
+        
+        button_layout1.addLayout(date_range_layout)
+        
+        # 醫事機構代碼
+        button_layout1.addWidget(QLabel("醫事機構代碼:"))
+        self.hospital_code_input = QLineEdit()
+        self.hospital_code_input.setPlaceholderText("請輸入10碼醫事機構代碼")
+        self.hospital_code_input.setMaximumWidth(200)
+        button_layout1.addWidget(self.hospital_code_input)
         
         self.select_all_btn = QPushButton("全選")
         self.select_all_btn.clicked.connect(self.select_all)
@@ -604,8 +804,31 @@ class UltraMainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.addPermanentWidget(self.progress_bar)
     
+    def on_date_mode_changed(self):
+        """日期模式切換處理"""
+        if self.preset_radio.isChecked():
+            # 預設範圍模式
+            self.years_combo.setEnabled(True)
+            self.start_date.setEnabled(False)
+            self.end_date.setEnabled(False)
+        else:
+            # 自訂區間模式
+            self.years_combo.setEnabled(False)
+            self.start_date.setEnabled(True)
+            self.end_date.setEnabled(True)
+    
     def select_folder(self):
         """選擇資料夾"""
+        # 檢查是否已填入醫事機構代碼
+        if not self.hospital_code_input.text().strip():
+            QMessageBox.warning(
+                self,
+                "需要醫事機構代碼",
+                "請先填入醫事機構代碼再選擇資料夾"
+            )
+            self.hospital_code_input.setFocus()
+            return
+        
         folder = QFileDialog.getExistingDirectory(
             self,
             "選擇包含DBF檔案的資料夾",
@@ -637,9 +860,22 @@ class UltraMainWindow(QMainWindow):
             # 根據CO18H檔案是否存在決定處理方式
             if co18h_path.exists():
                 # 有CO18H檔案，使用Ultra載入血壓資料
-                years_text = self.years_combo.currentText()
-                years_limit = {"今年": 0.1, "三個月內": 0.25, "半年內": 0.5, "一年內": 1.0}[years_text]
-                self.load_blood_pressure_ultra(str(co18h_path), patient_ids, years_limit)
+                if self.preset_radio.isChecked():
+                    # 使用預設範圍
+                    years_text = self.years_combo.currentText()
+                    years_limit = {"今年": 0.1, "三個月內": 0.25, "半年內": 0.5, "一年內": 1.0}[years_text]
+                    self.load_blood_pressure_ultra(str(co18h_path), patient_ids, years_limit, None, None)
+                else:
+                    # 使用自訂日期區間
+                    start_date = self.start_date.date().toPython()  # 轉換為 Python datetime.date
+                    end_date = self.end_date.date().toPython()
+                    
+                    # 驗證日期區間
+                    if start_date >= end_date:
+                        QMessageBox.warning(self, "日期錯誤", "起始日期必須早於結束日期")
+                        return
+                    
+                    self.load_blood_pressure_ultra(str(co18h_path), patient_ids, None, start_date, end_date)
             else:
                 # 沒有CO18H檔案，手動填充表格
                 self.table.populate_table()
@@ -654,14 +890,20 @@ class UltraMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "載入錯誤", f"載入資料時發生錯誤:\\n{str(e)}")
     
-    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: float):
+    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         """血壓載入"""
-        range_text = {0.1: "今年", 0.25: "三個月內", 0.5: "半年內", 1.0: "一年內"}.get(years_limit, f"{years_limit}年內")
+        if years_limit is not None:
+            # 預設範圍模式
+            range_text = {0.1: "今年", 0.25: "三個月內", 0.5: "半年內", 1.0: "一年內"}.get(years_limit, f"{years_limit}年內")
+        else:
+            # 自訂區間模式
+            range_text = f"{start_date.strftime('%Y/%m/%d')} ~ {end_date.strftime('%Y/%m/%d')}"
+        
         self.status_bar.showMessage(f"載入中 - {range_text}血壓資料...")
         self.progress_bar.setVisible(True)
         self.select_folder_btn.setEnabled(False)
         
-        self.loading_thread = UltraLoadingThread(co18h_path, patient_ids, years_limit)
+        self.loading_thread = UltraLoadingThread(co18h_path, patient_ids, years_limit, start_date, end_date)
         self.loading_thread.progress.connect(self.on_loading_progress)
         self.loading_thread.finished.connect(self.on_loading_finished)
         self.loading_thread.start()
@@ -769,114 +1011,362 @@ class UltraMainWindow(QMainWindow):
         """匯出資料"""
         export_data = self.table.get_export_data()
         
+        print(f"匯出調試: 準備匯出 {len(export_data)} 筆資料")
+        for i, patient in enumerate(export_data[:5]):  # 顯示前5筆
+            print(f"  {i+1}: {patient['pat_pid']} - 收縮壓:{patient.get('systolic', 0)}, 舒張壓:{patient.get('diastolic', 0)}")
+        
         if not export_data:
             QMessageBox.warning(self, "警告", "請選擇至少一筆有血壓值的資料!")
             return
         
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "儲存XML檔案",
-            "TOTFA.xml",
-            "XML檔案 (*.xml)"
-        )
+        # 詢問用戶要匯出的格式
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QRadioButton
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("選擇匯出格式")
+        dialog.setModal(True)
+        
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("請選擇匯出格式:"))
+        
+        xml_radio = QRadioButton("僅匯出 XML 檔案")
+        zip_radio = QRadioButton("匯出 ZIP 壓縮檔案 (可直接上傳VPN，建議使用)")
+        xml_radio.setChecked(True)  # 預設選擇XML
+        
+        layout.addWidget(xml_radio)
+        layout.addWidget(zip_radio)
+        
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        if dialog.exec() != QDialog.Accepted:
+            return
+        
+        # 根據選擇決定檔案格式和名稱
+        if zip_radio.isChecked():
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "儲存ZIP檔案",
+                "TOTFA.zip",
+                "ZIP檔案 (*.zip)"
+            )
+            export_as_zip = True
+        else:
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "儲存XML檔案",
+                "TOTFA.xml",
+                "XML檔案 (*.xml)"
+            )
+            export_as_zip = False
         
         if not filename:
             return
         
         try:
-            self.write_xml(export_data, filename)
+            if export_as_zip:
+                self.write_xml_and_zip(export_data, filename)
+            else:
+                self.write_xml(export_data, filename)
+            
+            # 統計實際匯出的病患數（每個病患一筆資料，包含收縮壓和舒張壓）
+            valid_exports = sum(1 for p in export_data if p.get('systolic', 0) > 0 and p.get('diastolic', 0) > 0)
+            
+            file_type = "ZIP 壓縮檔案" if export_as_zip else "XML檔案"
             QMessageBox.information(
                 self,
                 "匯出成功",
                 f"✅ 匯出成功!\n"
                 f"📁 檔案: {Path(filename).name}\n"
-                f"📊 匯出: {len(export_data)} 筆血壓資料\n"
-                f"📋 格式: 健保署XML規範"
+                f"📦 格式: {file_type}\n"
+                f"📊 匯出: {valid_exports} 位病患血壓資料\n"
+                f"📋 規範: 健保署XML格式\n"
+                f"🔍 每位病患包含收縮壓與舒張壓記錄"
             )
-            self.status_bar.showMessage(f"匯出完成 - {len(export_data)} 筆資料")
+            self.status_bar.showMessage(f"匯出完成 - {valid_exports} 位病患資料 ({file_type})")
             
         except Exception as e:
-            QMessageBox.critical(self, "匯出錯誤", f"匯出失敗:\\n{str(e)}")
+            QMessageBox.critical(self, "匯出錯誤", f"匯出失敗:\n{str(e)}")
     
     def write_xml(self, data: List[Dict], filename: str):
-        """寫入XML - 符合健保署规范"""
-        from datetime import datetime
+        """寫入XML - 符合健保署最新规范"""
+        from datetime import datetime, timedelta
+        import os
+        
+        # 取得醫事機構代碼
+        hospital_code = self.hospital_code_input.text().strip()
+        if not hospital_code:
+            raise Exception("請先填入醫事機構代碼")
+        
+        # 嘗試載入額外的DBF資料
+        folder_path = self.table.dbf_folder
+        co01m_data = {}
+        co03l_data = {}
+        
+        # 嘗試讀取CO01M.DBF的出生日期資料
+        co01m_path = os.path.join(folder_path, 'CO01M.DBF')
+        if os.path.exists(co01m_path):
+            try:
+                table = dbf.Table(co01m_path)
+                table.open()
+                
+                loaded_count = 0
+                
+                for record in table:
+                    try:
+                        # 直接使用欄位名稱訪問
+                        pid = str(record.KCSTMR).strip().zfill(7) if record.KCSTMR else ''
+                        birth_date = str(record.MBIRTHDT).strip() if record.MBIRTHDT else ''
+                        
+                        if pid and birth_date:
+                            co01m_data[pid] = birth_date
+                            loaded_count += 1
+                            
+                    except Exception as e:
+                        continue
+                
+                table.close()
+                print(f"CO01M載入: {loaded_count} 筆出生日期")
+            except Exception as e:
+                print(f"CO01M讀取失敗: {e}")
+        
+        # 嘗試讀取co03l.dbf的edate資料
+        co03l_path = os.path.join(folder_path, 'co03l.dbf')
+        if os.path.exists(co03l_path):
+            try:
+                table = dbf.Table(co03l_path)
+                table.open()
+                for record in table:
+                    pid = str(record.KCSTMR).strip().zfill(7) if hasattr(record, 'KCSTMR') else ''
+                    edate = str(record.EDATE).strip() if hasattr(record, 'EDATE') else ''
+                    if pid and edate:
+                        # 建立key為 pid+date 的索引
+                        key = f"{pid}_{str(record.HDATE).strip() if hasattr(record, 'HDATE') else ''}"
+                        co03l_data[key] = edate
+                table.close()
+            except:
+                pass
         
         # 生成符合健保署規範的XML內容
         xml_lines = []
         xml_lines.append('<?xml version="1.0" encoding="Big5"?>')
         xml_lines.append('<patient>')
         
+        # 獲取當前時間的秒數，用於統一所有r10標籤的秒數部分（避免重複上傳失敗）
+        unified_second = datetime.now().second
+        
+        print(f"準備匯出 {len(data)} 位病患，CO01M資料: {len(co01m_data)} 筆")
+        print(f"統一秒數設定: {unified_second:02d} (避免重複上傳)")
+        h10_count = 0
+        
         for patient in data:
             xml_lines.append('  <hdata>')
             
-            # h1-h22 基本資料段 (按照規範顺序)
-            xml_lines.append('    <h1>1</h1>')  # 報告類別(檢體檢驗報告)
-            xml_lines.append('    <h2>3522013684</h2>')  # 醫事機構代碼
-            xml_lines.append('    <h3>11</h3>')  # 醫事類別
+            # h1: 報告類別 (固定為1)
+            xml_lines.append('    <h1>1</h1>')
             
-            # h4 費用年月 (民國年YYMM)
-            current_date = datetime.now()
-            tw_year = current_date.year - 1911
-            h4_value = f"{tw_year:03d}{current_date.month:02d}"
+            # h2: 醫事機構代碼
+            xml_lines.append(f'    <h2>{hospital_code}</h2>')
+            
+            # h3: 醫事類別 (固定為11)
+            xml_lines.append('    <h3>11</h3>')
+            
+            # h4: 血壓測量數值的年月 (從hdate取得)
+            if patient.get('hdate'):
+                # hdate格式為民國年YYYMMDD，取前5碼(YYYMM)
+                h4_value = patient['hdate'][:5] if len(patient['hdate']) >= 5 else ''
+            else:
+                # 使用當前日期
+                current_date = datetime.now()
+                tw_year = current_date.year - 1911
+                h4_value = f"{tw_year:03d}{current_date.month:02d}"
             xml_lines.append(f'    <h4>{h4_value}</h4>')
             
-            # h5 健保卡過卡日期時間 (YYYYMMDDHHMISS)
-            current_datetime = datetime.now()
-            tw_year_full = current_datetime.year - 1911
-            h5_value = f"{tw_year_full:03d}{current_datetime.month:02d}{current_datetime.day:02d}{current_datetime.hour:02d}{current_datetime.minute:02d}{current_datetime.second:02d}"
+            # h5: 健保卡過卡日期時間 (使用hdate + htime)
+            if patient.get('hdate') and patient.get('htime'):
+                h5_value = patient['hdate'] + patient['htime']
+            else:
+                # 使用當前時間
+                current_datetime = datetime.now()
+                tw_year = current_datetime.year - 1911
+                h5_value = f"{tw_year:03d}{current_datetime.month:02d}{current_datetime.day:02d}{current_datetime.hour:02d}{current_datetime.minute:02d}{current_datetime.second:02d}"
             xml_lines.append(f'    <h5>{h5_value}</h5>')
             
-            xml_lines.append('    <h6>01</h6>')  # 就醫類別(門診)
-            xml_lines.append('    <h7>0023</h7>')  # 就醫序號(血壓檢驗項目代碼)
-            xml_lines.append('    <h8>1</h8>')   # 補卡註記
+            # h6: 就醫類別 (固定為01)
+            xml_lines.append('    <h6>01</h6>')
             
-            # h9 身分證統一編號 (非必填)
+            # h7: 就醫序號 (查詢co03l.dbf的edate欄位)
+            h7_value = 'Z000'  # 預設值
+            if patient.get('pat_pid') and patient.get('hdate'):
+                key = f"{patient['pat_pid'].zfill(7)}_{patient['hdate']}"
+                if key in co03l_data:
+                    edate = co03l_data[key]
+                    # 去掉開頭的民國年(前3碼)
+                    if len(edate) > 3:
+                        h7_value = edate[3:].zfill(4)
+                    if not h7_value or h7_value == '0000':
+                        h7_value = 'Z000'
+                else:
+                    h7_value = '0023'  # 若無資料使用血壓檢驗項目代碼
+            xml_lines.append(f'    <h7>{h7_value}</h7>')
+            
+            # h8: 補卡註記 (固定為1)
+            xml_lines.append('    <h8>1</h8>')
+            
+            # h9: 身分證字號
             if patient.get('pat_id') and patient['pat_id'].strip():
                 xml_lines.append(f'    <h9>{patient["pat_id"]}</h9>')
             
-            # h10 病歷號 (7位數)
-            xml_lines.append(f'    <h10>{patient["pat_pid"].zfill(7)}</h10>')
+            # h10: 出生日期 (從CO01M.DBF取得)
+            patient_pid = patient['pat_pid'].zfill(7)
+            birth_date = co01m_data.get(patient_pid, '')
+            if birth_date:
+                xml_lines.append(f'    <h10>{birth_date}</h10>')
+                h10_count += 1
             
-            # h11 檢驗日期 (民國年YYYMMDD)
-            current_date = datetime.now()
-            tw_year = current_date.year - 1911
-            h11_value = f"{tw_year:03d}{current_date.month:02d}{current_date.day:02d}"
-            xml_lines.append(f'    <h11>{h11_value}</h11>')
+            # h11: 就醫日期 (測量日期)
+            if patient.get('hdate'):
+                xml_lines.append(f'    <h11>{patient["hdate"]}</h11>')
             
-            # h22 病患姓名 (非必填)
-            if patient.get('pat_namec') and patient['pat_namec'].strip():
-                xml_lines.append(f'    <h22>{patient["pat_namec"]}</h22>')
+            # h12: 同上
+            if patient.get('hdate'):
+                xml_lines.append(f'    <h12>{patient["hdate"]}</h12>')
+            
+            # h15: 固定為Y00006
+            xml_lines.append('    <h15>Y00006</h15>')
+            
+            # h16: 現在的時間點
+            current_datetime = datetime.now()
+            tw_year = current_datetime.year - 1911
+            h16_value = f"{tw_year:03d}{current_datetime.month:02d}{current_datetime.day:02d}{current_datetime.hour:02d}{current_datetime.minute:02d}{current_datetime.second:02d}"
+            xml_lines.append(f'    <h16>{h16_value}</h16>')
+            
+            # h20: 檢查時間 (日期+時間)
+            if patient.get('hdate') and patient.get('htime'):
+                # 只取時間部分的前4碼(時分)
+                time_part = patient['htime'][:4] if len(patient['htime']) >= 4 else patient['htime']
+                h20_value = patient['hdate'] + time_part
+                xml_lines.append(f'    <h20>{h20_value}</h20>')
+            
+            # h22: 固定為"血壓"
+            xml_lines.append('    <h22>血壓</h22>')
+            
+            # h26: 固定為0
+            xml_lines.append('    <h26>0</h26>')
             
             # 報告資料段 - 收縮壓
             if patient.get('systolic', 0) > 0:
                 xml_lines.append('    <rdata>')
-                xml_lines.append('      <r1>1</r1>')  # 報告序號
-                xml_lines.append('      <r2>收縮壓</r2>')  # 檢驗項目名稱
-                xml_lines.append('      <r3>生理量測血壓(OBPM)</r3>')  # 檢驗方法
-                xml_lines.append(f'      <r4>{patient["systolic"]}</r4>')  # 檢驗報告結果值
-                xml_lines.append('      <r5>mmHg</r5>')  # 單位
-                xml_lines.append('      <r6-1>90-130</r6-1>')  # 參考值
+                xml_lines.append('      <r1>1</r1>')
+                xml_lines.append('      <r2>收縮壓</r2>')
+                xml_lines.append('      <r3>診間血壓監測(OBPM)</r3>')
+                xml_lines.append(f'      <r4>{patient["systolic"]}</r4>')
+                xml_lines.append('      <r5>mmHg</r5>')
+                xml_lines.append('      <r6-1>90-130</r6-1>')
+                xml_lines.append(f'      <r9>{hospital_code}</r9>')
+                
+                # r10: 測量時間 (htime加一分鐘，秒數統一)
+                if patient.get('hdate') and patient.get('htime'):
+                    # 解析時間並加一分鐘，秒數使用統一值
+                    try:
+                        time_str = patient['htime']
+                        if len(time_str) >= 6:
+                            hour = int(time_str[:2])
+                            minute = int(time_str[2:4])
+                            # 原始秒數不使用，改用統一秒數
+                            
+                            # 加一分鐘
+                            minute += 1
+                            if minute >= 60:
+                                minute = 0
+                                hour += 1
+                                if hour >= 24:
+                                    hour = 0
+                            
+                            # 只有秒數使用統一值，其他保持原參數
+                            r10_value = f"{patient['hdate']}{hour:02d}{minute:02d}{unified_second:02d}"
+                        else:
+                            r10_value = patient['hdate'] + patient['htime']
+                    except:
+                        r10_value = patient['hdate'] + patient['htime']
+                    
+                    xml_lines.append(f'      <r10>{r10_value}</r10>')
+                
                 xml_lines.append('    </rdata>')
             
             # 報告資料段 - 舒張壓
             if patient.get('diastolic', 0) > 0:
                 xml_lines.append('    <rdata>')
-                xml_lines.append('      <r1>2</r1>')  # 報告序號
-                xml_lines.append('      <r2>舒張壓</r2>')  # 檢驗項目名稱
-                xml_lines.append('      <r3>生理量測血壓(OBPM)</r3>')  # 檢驗方法
-                xml_lines.append(f'      <r4>{patient["diastolic"]}</r4>')  # 檢驗報告結果值
-                xml_lines.append('      <r5>mmHg</r5>')  # 單位
-                xml_lines.append('      <r6-1>60-80</r6-1>')  # 參考值
+                xml_lines.append('      <r1>2</r1>')
+                xml_lines.append('      <r2>舒張壓</r2>')
+                xml_lines.append('      <r3>診間血壓監測(OBPM)</r3>')
+                xml_lines.append(f'      <r4>{patient["diastolic"]}</r4>')
+                xml_lines.append('      <r5>mmHg</r5>')
+                xml_lines.append('      <r6-1>60-80</r6-1>')
+                xml_lines.append(f'      <r9>{hospital_code}</r9>')
+                
+                # r10: 測量時間 (htime加一分鐘，秒數統一)
+                if patient.get('hdate') and patient.get('htime'):
+                    # 解析時間並加一分鐘，秒數使用統一值
+                    try:
+                        time_str = patient['htime']
+                        if len(time_str) >= 6:
+                            hour = int(time_str[:2])
+                            minute = int(time_str[2:4])
+                            # 原始秒數不使用，改用統一秒數
+                            
+                            # 加一分鐘
+                            minute += 1
+                            if minute >= 60:
+                                minute = 0
+                                hour += 1
+                                if hour >= 24:
+                                    hour = 0
+                            
+                            # 只有秒數使用統一值，其他保持原參數
+                            r10_value = f"{patient['hdate']}{hour:02d}{minute:02d}{unified_second:02d}"
+                        else:
+                            r10_value = patient['hdate'] + patient['htime']
+                    except:
+                        r10_value = patient['hdate'] + patient['htime']
+                    
+                    xml_lines.append(f'      <r10>{r10_value}</r10>')
+                
                 xml_lines.append('    </rdata>')
             
             xml_lines.append('  </hdata>')
         
         xml_lines.append('</patient>')
         
+        print(f"XML生成完成，包含 {h10_count} 個h10標籤")
+        
         # 寫入檔案 (Big5編碼)
         with open(filename, 'w', encoding='big5', errors='ignore') as f:
             f.write('\n'.join(xml_lines))
+    
+    def write_xml_and_zip(self, data: List[Dict], zip_filename: str):
+        """寫入XML並壓縮成ZIP檔案"""
+        import tempfile
+        import os
+        
+        # 建立暫存目錄
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # 產生XML檔案名稱（基於ZIP檔案名稱）
+            zip_name = Path(zip_filename).stem
+            xml_filename = os.path.join(temp_dir, f"{zip_name}.xml")
+            
+            # 寫入XML到暫存檔案
+            self.write_xml(data, xml_filename)
+            
+            # 建立ZIP檔案
+            with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
+                # 將XML檔案加入ZIP
+                zipf.write(xml_filename, f"{zip_name}.xml")
+            
+            print(f"ZIP檔案建立完成: {zip_filename}")
+            print(f"壓縮內容: {zip_name}.xml")
     
     def closeEvent(self, event):
         """關閉事件"""

@@ -40,3 +40,9 @@ test_data/
 *.log
 Fix_Team_Framework.md
 Development_Team_Framework.md
+
+# 建置和分發資料夾
+build/
+dist/
+release/
+*.spec
