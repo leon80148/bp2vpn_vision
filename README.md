@@ -144,8 +144,20 @@ create_installer.bat
 ## 🆔 版本資訊
 
 - **目前版本**: v2.0 Ultra
-- **更新日期**: 2024年
-- **主要改進**: GUI介面、效能優化、ZIP壓縮、智慧選取
+- **更新日期**: 2025年
+- **主要改進**:
+  - Phase 1: 資料驗證與錯誤處理強化
+    - 血壓數值範圍驗證（收縮壓50-250, 舒張壓30-150 mmHg）
+    - Big5 編碼嚴格模式
+    - 醫事機構代碼格式驗證（10碼數字）
+  - Phase 2: 代碼重構
+    - 常數類別化（HealthInsuranceCode, BloodPressureRange）
+    - 輔助函式提取（normalize_patient_id, calculate_r10_time）
+    - 消除代碼重複
+  - Phase 3: 品質提升
+    - 完整 logging 模組（取代 print）
+    - 關鍵函式型別註解
+    - 改進日期比對邏輯（嚴格驗證日期格式）
 
 ## 📄 授權條款
 

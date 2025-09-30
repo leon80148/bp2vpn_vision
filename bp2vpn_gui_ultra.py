@@ -6,12 +6,23 @@ BP2VPN Vision v2.0
 
 import sys
 import os
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional, Tuple
 import time
 from collections import defaultdict
 import zipfile
+
+# 設置 logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 
 try:
     from PySide6.QtWidgets import (QApplication, QMessageBox, QMainWindow, QVBoxLayout, 
@@ -20,7 +31,7 @@ try:
                                    QLineEdit, QStatusBar, QProgressBar, QSpinBox, QComboBox,
                                    QDateEdit, QButtonGroup, QRadioButton)
     from PySide6.QtCore import Qt, QTimer, Signal, QThread, QObject, QDate
-    from PySide6.QtGui import QFont, QColor, QBrush
+    from PySide6.QtGui import QFont, QColor, QBrush, QCloseEvent
 except ImportError as e:
     print(f"錯誤: 無法匯入PySide6: {e}")
     print("請執行: pip install PySide6")
@@ -161,7 +172,7 @@ class UltraBloodPressureLoader(QObject):
         self.start_date = start_date
         self.end_date = end_date
         
-    def load(self):
+    def load(self) -> None:
         """優化的載入演算法"""
         try:
             # 計算日期限制
@@ -178,15 +189,15 @@ class UltraBloodPressureLoader(QObject):
                 date_limit_tw = date_limit.year - 1911
                 date_limit_str = f"{date_limit_tw:03d}{date_limit.month:02d}{date_limit.day:02d}"
                 
-                print(f"載入: {len(self.patient_set)} 位病患")
-                print(f"今天: {today.strftime('%Y-%m-%d')} (民國{today.year-1911}年)")
-                print(f"時間範圍參數: {self.years_limit}")
+                logger.info(f"載入: {len(self.patient_set)} 位病患")
+                logger.info(f"今天: {today.strftime('%Y-%m-%d')} (民國{today.year-1911}年)")
+                logger.info(f"時間範圍參數: {self.years_limit}")
                 if self.years_limit == 0.1:
-                    print(f"使用今年模式 -> {date_limit.strftime('%Y-%m-%d')}")
+                    logger.info(f"使用今年模式 -> {date_limit.strftime('%Y-%m-%d')}")
                 else:
                     days = int(self.years_limit * 365)
-                    print(f"往前推{days}天 -> {date_limit.strftime('%Y-%m-%d')}")
-                print(f"日期限制字串: {date_limit_str}")
+                    logger.info(f"往前推{days}天 -> {date_limit.strftime('%Y-%m-%d')}")
+                logger.debug(f"日期限制字串: {date_limit_str}")
                 
                 # 結束日期設為今天
                 end_date_limit = today
@@ -203,10 +214,10 @@ class UltraBloodPressureLoader(QObject):
                 end_date_tw = end_date_limit.year - 1911
                 end_date_str = f"{end_date_tw:03d}{end_date_limit.month:02d}{end_date_limit.day:02d}"
                 
-                print(f"載入: {len(self.patient_set)} 位病患")
-                print(f"自訂日期區間: {self.start_date.strftime('%Y-%m-%d')} ~ {self.end_date.strftime('%Y-%m-%d')}")
-                print(f"起始日期限制字串: {date_limit_str}")
-                print(f"結束日期限制字串: {end_date_str}")
+                logger.info(f"載入: {len(self.patient_set)} 位病患")
+                logger.info(f"自訂日期區間: {self.start_date.strftime('%Y-%m-%d')} ~ {self.end_date.strftime('%Y-%m-%d')}")
+                logger.debug(f"起始日期限制字串: {date_limit_str}")
+                logger.debug(f"結束日期限制字串: {end_date_str}")
             
             # 使用字典快速儲存每個病患的最新血壓
             bp_data = {}
@@ -238,7 +249,7 @@ class UltraBloodPressureLoader(QObject):
             last_emit = time.time()
             batch_size = 1000  # 批次處理
             
-            print(f"開始掃描 {total_records} 筆記錄，日期限制: {date_limit_str}...")
+            logger.info(f"開始掃描 {total_records} 筆記錄，日期限制: {date_limit_str}...")
             
             # 記錄前幾筆的日期資料作為參考
             sample_dates = []
@@ -256,21 +267,24 @@ class UltraBloodPressureLoader(QObject):
                     # 優化：先快速檢查日期格式，避免不必要的字串操作
                     try:
                         record_date = str(record.HDATE).strip()
-                        
+
                         # 收集前10筆記錄的日期作為參考
                         if len(sample_dates) < 10:
                             sample_dates.append(record_date)
-                        
-                        if len(record_date) < 7:
+
+                        # 嚴格檢查日期格式：必須是7位數字
+                        if len(record_date) != 7 or not record_date.isdigit():
                             continue
-                        # 快速字串比較，避免複雜的日期解析
+
+                        # 快速字串比較（民國年格式 YYYMMDD）
+                        # 使用 < 確保只保留在限制日期之後（含當日）的記錄
                         if record_date < date_limit_str:
                             continue
-                        
-                        # 自訂區間模式需要檢查結束日期
+
+                        # 自訂區間模式：檢查結束日期（含當日）
                         if self.years_limit is None and record_date > end_date_str:
                             continue
-                    except:
+                    except Exception:
                         continue
                     
                     date_filtered += 1
@@ -365,32 +379,32 @@ class UltraBloodPressureLoader(QObject):
                         'value': None
                     }
             
-            print(f"掃描完成！篩選效果分析:")
-            print(f"- 總記錄: {total_records}")
+            logger.info(f"掃描完成！篩選效果分析:")
+            logger.info(f"- 總記錄: {total_records}")
             if sample_dates:
-                print(f"- 前10筆記錄日期樣本: {sample_dates}")
-            print(f"- 通過日期篩選: {date_filtered} ({date_filtered/total_records*100:.1f}%)")
+                logger.debug(f"- 前10筆記錄日期樣本: {sample_dates}")
+            logger.info(f"- 通過日期篩選: {date_filtered} ({date_filtered/total_records*100:.1f}%)")
             if date_filtered > 0:
-                print(f"- BP記錄: {bp_found} ({bp_found/date_filtered*100:.1f}% of date filtered)")
+                logger.info(f"- BP記錄: {bp_found} ({bp_found/date_filtered*100:.1f}% of date filtered)")
                 if bp_found > 0:
-                    print(f"- 病患匹配: {patient_matched} ({patient_matched/bp_found*100:.1f}% of BP records)")
-            print(f"- 最終有血壓病患: {patients_with_bp}")
+                    logger.info(f"- 病患匹配: {patient_matched} ({patient_matched/bp_found*100:.1f}% of BP records)")
+            logger.info(f"- 最終有血壓病患: {patients_with_bp}")
             
             self.finished.emit(final_data)
 
         except FileNotFoundError as e:
             error_msg = f"找不到檔案: {self.co18h_path}\n\n請確認DBF檔案是否存在"
-            print(f"載入錯誤: {error_msg}")
+            logger.error(f"載入錯誤: {error_msg}")
             self.error_occurred.emit(error_msg)
 
         except PermissionError as e:
             error_msg = f"無法讀取檔案: {self.co18h_path}\n\n檔案可能正被其他程式使用"
-            print(f"載入錯誤: {error_msg}")
+            logger.error(f"載入錯誤: {error_msg}")
             self.error_occurred.emit(error_msg)
 
         except Exception as e:
             error_msg = f"載入血壓資料時發生錯誤\n\n錯誤訊息: {str(e)}\n檔案: {self.co18h_path}"
-            print(f"載入錯誤: {error_msg}")
+            logger.error(f"載入錯誤: {error_msg}")
             self.error_occurred.emit(error_msg)
 
 
@@ -409,7 +423,7 @@ class UltraPatientTableWidget(QTableWidget):
         self.dbf_folder = ""  # 儲存DBF資料夾路徑
         self._updating = False  # 防止遞迴更新
         
-    def setup_table(self):
+    def setup_table(self) -> None:
         """設定表格"""
         headers = ["選擇", "病歷號", "姓名", "身分證", "收縮壓", "舒張壓", "測量日期", "狀態"]
         self.setColumnCount(len(headers))
@@ -468,13 +482,13 @@ class UltraPatientTableWidget(QTableWidget):
             
             table.close()
             
-            print(f"VISHFAM掃描完成:")
-            print(f"- 總記錄: {total_records}")
-            print(f"- 重複記錄: {duplicates_found}")
-            print(f"- 最終病患: {len(patients)}")
-            
+            logger.info(f"VISHFAM掃描完成:")
+            logger.info(f"- 總記錄: {total_records}")
+            logger.info(f"- 重複記錄: {duplicates_found}")
+            logger.info(f"- 最終病患: {len(patients)}")
+
             self.patient_data = patients
-            print(f"Patient data assigned: {len(self.patient_data)} patients")
+            logger.debug(f"Patient data assigned: {len(self.patient_data)} patients")
             # 不在這裡populate_table，等待血壓資料載入完成後再一起處理
             
         except Exception as e:
@@ -482,12 +496,12 @@ class UltraPatientTableWidget(QTableWidget):
         
         return patient_ids
     
-    def update_blood_pressure_data(self, bp_data: dict):
+    def update_blood_pressure_data(self, bp_data: Dict[str, Dict]) -> None:
         """更新血壓資料"""
         self.bp_data = bp_data
         self.populate_table()
     
-    def populate_table(self):
+    def populate_table(self) -> None:
         """填充表格"""
         self._updating = True
         
@@ -497,8 +511,8 @@ class UltraPatientTableWidget(QTableWidget):
         
         # 再設定正確的行數
         self.setRowCount(len(self.patient_data))
-        
-        print(f"Table refill: patients={len(self.patient_data)}, rows={self.rowCount()}")
+
+        logger.debug(f"Table refill: patients={len(self.patient_data)}, rows={self.rowCount()}")
         
         # 清空之前的選擇狀態
         self.selected_patients.clear()
@@ -586,14 +600,14 @@ class UltraPatientTableWidget(QTableWidget):
         self._updating = False
         
         # 初始狀態已設定，無需再次更新
-        
+
         if auto_selected > 0:
-            print(f"自動選擇了 {auto_selected} 位有血壓資料的病患")
-            print(f"實際選擇集合大小: {len(self.selected_patients)}")
+            logger.info(f"自動選擇了 {auto_selected} 位有血壓資料的病患")
+            logger.debug(f"實際選擇集合大小: {len(self.selected_patients)}")
         
         self.selection_changed.emit()
     
-    def on_checkbox_changed(self, row, state):
+    def on_checkbox_changed(self, row: int, state: int) -> None:
         """選擇框變更 - 同時更新狀態欄位"""
         if self._updating or row >= len(self.patient_data):
             return
@@ -610,7 +624,7 @@ class UltraPatientTableWidget(QTableWidget):
         self.update_row_status(row)
         self.selection_changed.emit()
     
-    def on_bp_value_changed(self, row):
+    def on_bp_value_changed(self, row: int) -> None:
         """血壓值變更時的處理 - 修正自動選擇邏輯"""
         if self._updating or row >= len(self.patient_data):
             return
@@ -639,7 +653,7 @@ class UltraPatientTableWidget(QTableWidget):
         self.data_changed.emit()
         self.selection_changed.emit()
     
-    def update_row_status(self, row):
+    def update_row_status(self, row: int) -> None:
         """更新單一列的狀態顯示"""
         if row >= len(self.patient_data):
             return
@@ -679,8 +693,8 @@ class UltraPatientTableWidget(QTableWidget):
     def get_export_data(self) -> List[Dict]:
         """取得匯出資料 - 完全基於GUI表單中的勾選狀態"""
         export_data = []
-        
-        print(f"開始檢查匯出資料，表格總行數: {self.rowCount()}")
+
+        logger.debug(f"開始檢查匯出資料，表格總行數: {self.rowCount()}")
         
         # 遍歷表格中每一行，檢查勾選狀態
         for row in range(self.rowCount()):
@@ -691,7 +705,7 @@ class UltraPatientTableWidget(QTableWidget):
             
             # 第二步：取得病患基本資料
             if row >= len(self.patient_data):
-                print(f"警告：第{row}行超出病患資料範圍")
+                logger.warning(f"第{row}行超出病患資料範圍")
                 continue
                 
             patient = self.patient_data[row].copy()
@@ -702,7 +716,7 @@ class UltraPatientTableWidget(QTableWidget):
             diastolic_spin = self.cellWidget(row, 5)
             
             if not (systolic_spin and diastolic_spin):
-                print(f"警告：第{row}行血壓輸入框不存在")
+                logger.warning(f"第{row}行血壓輸入框不存在")
                 continue
             
             # 取得GUI中的血壓值
@@ -712,8 +726,8 @@ class UltraPatientTableWidget(QTableWidget):
             # 第四步：驗證血壓數值範圍並只匯出有完整資料的病患
             if not (BloodPressureRange.SYSTOLIC_MIN <= systolic <= BloodPressureRange.SYSTOLIC_MAX and
                     BloodPressureRange.DIASTOLIC_MIN <= diastolic <= BloodPressureRange.DIASTOLIC_MAX):
-                print(f"跳過第{row}行：血壓值超出合理範圍 (收縮壓:{systolic}, 舒張壓:{diastolic})")
-                print(f"  合理範圍: 收縮壓 {BloodPressureRange.SYSTOLIC_MIN}-{BloodPressureRange.SYSTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}, "
+                logger.warning(f"跳過第{row}行：血壓值超出合理範圍 (收縮壓:{systolic}, 舒張壓:{diastolic})")
+                logger.debug(f"  合理範圍: 收縮壓 {BloodPressureRange.SYSTOLIC_MIN}-{BloodPressureRange.SYSTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}, "
                       f"舒張壓 {BloodPressureRange.DIASTOLIC_MIN}-{BloodPressureRange.DIASTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}")
                 continue
                 
@@ -739,12 +753,12 @@ class UltraPatientTableWidget(QTableWidget):
             
             # 加入匯出清單
             export_data.append(patient)
-            print(f"第{row}行已加入匯出：{patient_id} (收縮壓:{systolic}, 舒張壓:{diastolic})")
-        
-        print(f"匯出資料準備完成，共{len(export_data)}筆")
+            logger.debug(f"第{row}行已加入匯出：{patient_id} (收縮壓:{systolic}, 舒張壓:{diastolic})")
+
+        logger.info(f"匯出資料準備完成，共{len(export_data)}筆")
         return export_data
     
-    def select_all(self):
+    def select_all(self) -> None:
         """全選"""
         self._updating = True
         for row in range(self.rowCount()):
@@ -758,7 +772,7 @@ class UltraPatientTableWidget(QTableWidget):
         self._updating = False
         self.selection_changed.emit()
     
-    def clear_selection(self):
+    def clear_selection(self) -> None:
         """清除選擇"""
         self._updating = True
         for row in range(self.rowCount()):
@@ -783,7 +797,7 @@ class UltraLoadingThread(QThread):
         self.loader.finished.connect(self.finished.emit)
         self.loader.error_occurred.connect(self.error_occurred.emit)  # 連接錯誤信號
     
-    def run(self):
+    def run(self) -> None:
         self.loader.load()
 
 
@@ -795,7 +809,7 @@ class UltraMainWindow(QMainWindow):
         self.loading_thread = None
         self.setup_ui()
         
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         """設定介面"""
         self.setWindowTitle("BP2VPN Vision v2.0")
         self.setGeometry(100, 100, 1200, 800)
@@ -953,7 +967,7 @@ class UltraMainWindow(QMainWindow):
             self.start_date.setEnabled(True)
             self.end_date.setEnabled(True)
     
-    def select_folder(self):
+    def select_folder(self) -> None:
         """選擇資料夾"""
         # 檢查是否已填入醫事機構代碼
         if not self.hospital_code_input.text().strip():
@@ -974,7 +988,7 @@ class UltraMainWindow(QMainWindow):
         if folder:
             self.load_data(folder)
     
-    def load_data(self, folder: str):
+    def load_data(self, folder: str) -> None:
         """載入資料"""
         try:
             folder_path = Path(folder)
@@ -1026,7 +1040,7 @@ class UltraMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "載入錯誤", f"載入資料時發生錯誤:\\n{str(e)}")
     
-    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
+    def load_blood_pressure_ultra(self, co18h_path: str, patient_ids: List[str], years_limit: Optional[float] = None, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None) -> None:
         """血壓載入"""
         if years_limit is not None:
             # 預設範圍模式
@@ -1096,23 +1110,23 @@ class UltraMainWindow(QMainWindow):
         self.update_stats()
         self.status_bar.showMessage("就緒 - 可以開始操作")
     
-    def enable_controls(self):
+    def enable_controls(self) -> None:
         """啟用控制項"""
         self.select_all_btn.setEnabled(True)
         self.clear_btn.setEnabled(True)
         self.export_btn.setEnabled(True)
     
-    def select_all(self):
+    def select_all(self) -> None:
         """全選"""
         self.table.select_all()
         self.update_stats()
     
-    def clear_selection(self):
+    def clear_selection(self) -> None:
         """清除選擇"""
         self.table.clear_selection()
         self.update_stats()
     
-    def filter_table(self, text: str):
+    def filter_table(self, text: str) -> None:
         """篩選表格"""
         for row in range(self.table.rowCount()):
             show = True
@@ -1123,7 +1137,7 @@ class UltraMainWindow(QMainWindow):
                     show = False
             self.table.setRowHidden(row, not show)
     
-    def update_stats(self):
+    def update_stats(self) -> None:
         """更新統計 - 修正總數統計"""
         if not self.table:
             return
@@ -1158,15 +1172,15 @@ class UltraMainWindow(QMainWindow):
         self.stats_label.setText(f"總計: {total} 筆 | 已選: {selected} 筆")
         
         # 調試資訊
-        print(f"統計調試: 病患資料長度={len(self.table.patient_data) if self.table.patient_data else 0}, 表格行數={self.table.rowCount()}, 實際勾選={actual_selected}, 集合大小={selected}")
+        logger.debug(f"統計調試: 病患資料長度={len(self.table.patient_data) if self.table.patient_data else 0}, 表格行數={self.table.rowCount()}, 實際勾選={actual_selected}, 集合大小={selected}")
     
-    def export_data(self):
+    def export_data(self) -> None:
         """匯出資料"""
         export_data = self.table.get_export_data()
-        
-        print(f"匯出調試: 準備匯出 {len(export_data)} 筆資料")
+
+        logger.debug(f"匯出調試: 準備匯出 {len(export_data)} 筆資料")
         for i, patient in enumerate(export_data[:5]):  # 顯示前5筆
-            print(f"  {i+1}: {patient['pat_pid']} - 收縮壓:{patient.get('systolic', 0)}, 舒張壓:{patient.get('diastolic', 0)}")
+            logger.debug(f"  {i+1}: {patient['pat_pid']} - 收縮壓:{patient.get('systolic', 0)}, 舒張壓:{patient.get('diastolic', 0)}")
         
         if not export_data:
             QMessageBox.warning(self, "警告", "請選擇至少一筆有血壓值的資料!")
@@ -1243,7 +1257,7 @@ class UltraMainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "匯出錯誤", f"匯出失敗:\n{str(e)}")
     
-    def write_xml(self, data: List[Dict], filename: str):
+    def write_xml(self, data: List[Dict], filename: str) -> None:
         """寫入XML - 符合健保署最新规范"""
         from datetime import datetime, timedelta
         import os
@@ -1298,9 +1312,9 @@ class UltraMainWindow(QMainWindow):
                         continue
                 
                 table.close()
-                print(f"CO01M載入: {loaded_count} 筆出生日期")
+                logger.info(f"CO01M載入: {loaded_count} 筆出生日期")
             except Exception as e:
-                print(f"CO01M讀取失敗: {e}")
+                logger.warning(f"CO01M讀取失敗: {e}")
         
         # 嘗試讀取co03l.dbf的edate資料
         co03l_path = os.path.join(folder_path, 'co03l.dbf')
@@ -1326,9 +1340,9 @@ class UltraMainWindow(QMainWindow):
         
         # 獲取當前時間的秒數，用於統一所有r10標籤的秒數部分（避免重複上傳失敗）
         unified_second = datetime.now().second
-        
-        print(f"準備匯出 {len(data)} 位病患，CO01M資料: {len(co01m_data)} 筆")
-        print(f"統一秒數設定: {unified_second:02d} (避免重複上傳)")
+
+        logger.info(f"準備匯出 {len(data)} 位病患，CO01M資料: {len(co01m_data)} 筆")
+        logger.debug(f"統一秒數設定: {unified_second:02d} (避免重複上傳)")
         h10_count = 0
         
         for patient in data:
@@ -1344,9 +1358,9 @@ class UltraMainWindow(QMainWindow):
             xml_lines.append(f'    <h3>{HealthInsuranceCode.MEDICAL_CATEGORY}</h3>')
             
             # h4: 血壓測量數值的年月 (從hdate取得)
-            if patient.get('hdate'):
+            if patient.get('hdate') and len(patient['hdate']) >= 5:
                 # hdate格式為民國年YYYMMDD，取前5碼(YYYMM)
-                h4_value = patient['hdate'][:5] if len(patient['hdate']) >= 5 else ''
+                h4_value = patient['hdate'][:5]
             else:
                 # 使用當前日期
                 current_date = datetime.now()
@@ -1369,12 +1383,12 @@ class UltraMainWindow(QMainWindow):
 
             # h7: 就醫序號 (查詢co03l.dbf的edate欄位)
             h7_value = HealthInsuranceCode.DEFAULT_VISIT_SEQ
-            if patient.get('pat_pid') and patient.get('hdate'):
+            if patient.get('pat_pid') and patient.get('hdate') and len(patient.get('hdate', '')) == 7:
                 key = f"{patient['pat_pid'].zfill(7)}_{patient['hdate']}"
                 if key in co03l_data:
                     edate = co03l_data[key]
-                    # 去掉開頭的民國年(前3碼)
-                    if len(edate) > 3:
+                    # 去掉開頭的民國年(前3碼)，確保edate格式正確
+                    if len(edate) >= 4:
                         h7_value = edate[3:].zfill(4)
                     if not h7_value or h7_value == '0000':
                         h7_value = HealthInsuranceCode.DEFAULT_VISIT_SEQ
@@ -1465,8 +1479,8 @@ class UltraMainWindow(QMainWindow):
             xml_lines.append('  </hdata>')
         
         xml_lines.append('</patient>')
-        
-        print(f"XML生成完成，包含 {h10_count} 個h10標籤")
+
+        logger.info(f"XML生成完成，包含 {h10_count} 個h10標籤")
 
         # 寫入檔案 (Big5編碼，嚴格模式)
         xml_content = '\n'.join(xml_lines)
@@ -1498,7 +1512,7 @@ class UltraMainWindow(QMainWindow):
             )
             raise Exception(error_msg)
     
-    def write_xml_and_zip(self, data: List[Dict], zip_filename: str):
+    def write_xml_and_zip(self, data: List[Dict], zip_filename: str) -> None:
         """寫入XML並壓縮成ZIP檔案"""
         import tempfile
         import os
@@ -1516,11 +1530,11 @@ class UltraMainWindow(QMainWindow):
             with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
                 # 將XML檔案加入ZIP
                 zipf.write(xml_filename, f"{zip_name}.xml")
-            
-            print(f"ZIP檔案建立完成: {zip_filename}")
-            print(f"壓縮內容: {zip_name}.xml")
+
+            logger.info(f"ZIP檔案建立完成: {zip_filename}")
+            logger.debug(f"壓縮內容: {zip_name}.xml")
     
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent) -> None:
         """關閉事件"""
         if self.loading_thread and self.loading_thread.isRunning():
             reply = QMessageBox.question(
@@ -1540,7 +1554,7 @@ class UltraMainWindow(QMainWindow):
             event.accept()
 
 
-def main():
+def main() -> int:
     """主程式"""
     app = QApplication(sys.argv)
     app.setApplicationName("BP2VPN Vision")
@@ -1655,7 +1669,7 @@ def main():
     except Exception as e:
         import traceback
         error_msg = f"視窗初始化錯誤: {str(e)}\n\n詳細錯誤信息:\n{traceback.format_exc()}"
-        print(error_msg)
+        logger.error(error_msg)
         QMessageBox.critical(None, "程式錯誤", error_msg)
         return 1
 
@@ -1666,7 +1680,7 @@ if __name__ == "__main__":
     except Exception as e:
         import traceback
         error_msg = f"程式啟動錯誤: {str(e)}\n\n詳細錯誤信息:\n{traceback.format_exc()}"
-        print(error_msg)
+        logger.error(error_msg)
         
         # 嘗試顯示圖形化錯誤訊息
         try:
