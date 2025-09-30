@@ -34,6 +34,119 @@ except ImportError as e:
     sys.exit(1)
 
 
+# ============================================================================
+# 常數定義
+# ============================================================================
+
+class HealthInsuranceCode:
+    """健保署規範代碼常數"""
+
+    # 報告類別
+    REPORT_TYPE = "1"
+
+    # 醫事類別
+    MEDICAL_CATEGORY = "11"  # 西醫
+
+    # 案件分類
+    CASE_TYPE = "01"  # 門診
+
+    # 補卡註記
+    CARD_REPLACEMENT = "1"
+
+    # 診斷代碼
+    DIAGNOSIS_CODE = "Y00006"  # 高血壓相關
+
+    # 特定治療項目代號
+    BP_ITEM_CODE = "0023"  # 血壓檢驗項目
+
+    # 預設就醫序號
+    DEFAULT_VISIT_SEQ = "Z000"
+
+    # 轉檢FLAG
+    TRANSFER_FLAG = "0"
+
+    # 檢驗項目名稱
+    BP_TEST_NAME = "血壓"
+    BP_TEST_METHOD = "診間血壓監測(OBPM)"
+
+    # 血壓測量項目序號
+    SYSTOLIC_SEQ = "1"  # 收縮壓序號
+    DIASTOLIC_SEQ = "2"  # 舒張壓序號
+
+    # 血壓測量名稱
+    SYSTOLIC_NAME = "收縮壓"
+    DIASTOLIC_NAME = "舒張壓"
+
+    # 血壓單位
+    BP_UNIT = "mmHg"
+
+    # 血壓參考範圍
+    SYSTOLIC_REFERENCE = "90-130"
+    DIASTOLIC_REFERENCE = "60-80"
+
+
+class BloodPressureRange:
+    """血壓數值合理範圍"""
+
+    # 收縮壓範圍 (mmHg)
+    SYSTOLIC_MIN = 50
+    SYSTOLIC_MAX = 250
+
+    # 舒張壓範圍 (mmHg)
+    DIASTOLIC_MIN = 30
+    DIASTOLIC_MAX = 150
+
+
+# ============================================================================
+# 輔助函式
+# ============================================================================
+
+def normalize_patient_id(patient_id: str) -> str:
+    """
+    統一格式化病歷號為7位數
+
+    Args:
+        patient_id: 原始病歷號
+
+    Returns:
+        格式化後的病歷號（7位數，左側補零）
+    """
+    return patient_id.strip().zfill(7)
+
+
+def calculate_r10_time(hdate: str, htime: str, unified_second: int) -> str:
+    """
+    計算r10時間標籤（測量時間加一分鐘，秒數統一）
+
+    Args:
+        hdate: 測量日期（民國年格式 YYYMMDD）
+        htime: 測量時間（HHMMSS）
+        unified_second: 統一的秒數值
+
+    Returns:
+        r10時間字串（YYYMMDDHHMMSS）
+    """
+    try:
+        if len(htime) >= 6:
+            hour = int(htime[:2])
+            minute = int(htime[2:4])
+
+            # 加一分鐘
+            minute += 1
+            if minute >= 60:
+                minute = 0
+                hour += 1
+                if hour >= 24:
+                    hour = 0
+
+            # 只有秒數使用統一值，其他保持原參數
+            return f"{hdate}{hour:02d}{minute:02d}{unified_second:02d}"
+        else:
+            return hdate + htime
+    except (ValueError, IndexError):
+        return hdate + htime
+
+
 class UltraBloodPressureLoader(QObject):
     """超級優化的血壓資料載入器"""
     progress = Signal(int, int)
@@ -43,7 +156,7 @@ class UltraBloodPressureLoader(QObject):
     def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         super().__init__()
         self.co18h_path = co18h_path
-        self.patient_set = {pid.strip().zfill(7) for pid in patient_ids}
+        self.patient_set = {normalize_patient_id(pid) for pid in patient_ids}
         self.years_limit = years_limit
         self.start_date = start_date
         self.end_date = end_date
@@ -170,7 +283,7 @@ class UltraBloodPressureLoader(QObject):
                     bp_found += 1
                     
                     # 第三級篩選：檢查病歷號（只處理目標病患）
-                    patient_id = str(record.KCSTMR).strip().zfill(7)
+                    patient_id = normalize_patient_id(str(record.KCSTMR))
                     if patient_id not in self.patient_set:
                         continue
                         
@@ -187,8 +300,9 @@ class UltraBloodPressureLoader(QObject):
                         systolic = int(float(systolic_str))
                         diastolic = int(float(diastolic_str))
 
-                        # 驗證血壓數值範圍（收縮壓: 50-250 mmHg, 舒張壓: 30-150 mmHg）
-                        if not (50 <= systolic <= 250 and 30 <= diastolic <= 150):
+                        # 驗證血壓數值範圍
+                        if not (BloodPressureRange.SYSTOLIC_MIN <= systolic <= BloodPressureRange.SYSTOLIC_MAX and
+                                BloodPressureRange.DIASTOLIC_MIN <= diastolic <= BloodPressureRange.DIASTOLIC_MAX):
                             continue
                         
                         # 建立日期時間字串用於比較
@@ -409,7 +523,7 @@ class UltraPatientTableWidget(QTableWidget):
             if has_bp_data:
                 checkbox.setChecked(True)
                 # 使用統一格式的patient_id防止重複
-                normalized_pid = patient_id.strip().zfill(7)
+                normalized_pid = normalize_patient_id(patient_id)
                 self.selected_patients.add(normalized_pid)
                 auto_selected += 1
             
@@ -423,10 +537,10 @@ class UltraPatientTableWidget(QTableWidget):
             
             # 血壓值 - 可編輯的SpinBox，設定合理範圍
             systolic_spin = QSpinBox()
-            systolic_spin.setRange(0, 250)  # 收縮壓上限 250 mmHg
+            systolic_spin.setRange(0, BloodPressureRange.SYSTOLIC_MAX)
             systolic_spin.setMinimumHeight(28)
             systolic_spin.setMinimumWidth(100)
-            systolic_spin.setToolTip("收縮壓合理範圍: 50-250 mmHg")
+            systolic_spin.setToolTip(f"收縮壓合理範圍: {BloodPressureRange.SYSTOLIC_MIN}-{BloodPressureRange.SYSTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}")
             if bp_info.get('systolic'):
                 systolic_spin.setValue(bp_info['systolic'])
 
@@ -435,10 +549,10 @@ class UltraPatientTableWidget(QTableWidget):
             self.setCellWidget(row, 4, systolic_spin)
 
             diastolic_spin = QSpinBox()
-            diastolic_spin.setRange(0, 150)  # 舒張壓上限 150 mmHg
+            diastolic_spin.setRange(0, BloodPressureRange.DIASTOLIC_MAX)
             diastolic_spin.setMinimumHeight(28)
             diastolic_spin.setMinimumWidth(100)
-            diastolic_spin.setToolTip("舒張壓合理範圍: 30-150 mmHg")
+            diastolic_spin.setToolTip(f"舒張壓合理範圍: {BloodPressureRange.DIASTOLIC_MIN}-{BloodPressureRange.DIASTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}")
             if bp_info.get('diastolic'):
                 diastolic_spin.setValue(bp_info['diastolic'])
             
@@ -486,7 +600,7 @@ class UltraPatientTableWidget(QTableWidget):
             
         patient_id = self.patient_data[row]['pat_pid']
         # 使用統一格式防止重複
-        normalized_pid = patient_id.strip().zfill(7)
+        normalized_pid = normalize_patient_id(patient_id)
         if state == Qt.CheckState.Checked.value:
             self.selected_patients.add(normalized_pid)
         else:
@@ -516,7 +630,7 @@ class UltraPatientTableWidget(QTableWidget):
                     self._updating = True
                     checkbox.setChecked(True)
                     patient_id = self.patient_data[row]['pat_pid']
-                    normalized_pid = patient_id.strip().zfill(7)
+                    normalized_pid = normalize_patient_id(patient_id)
                     self.selected_patients.add(normalized_pid)
                     self._updating = False
         
@@ -581,7 +695,7 @@ class UltraPatientTableWidget(QTableWidget):
                 continue
                 
             patient = self.patient_data[row].copy()
-            patient_id = patient['pat_pid'].strip().zfill(7)
+            patient_id = normalize_patient_id(patient['pat_pid'])
             
             # 第三步：從GUI取得當前血壓值（以GUI顯示為準）
             systolic_spin = self.cellWidget(row, 4)
@@ -596,9 +710,11 @@ class UltraPatientTableWidget(QTableWidget):
             diastolic = diastolic_spin.value()
             
             # 第四步：驗證血壓數值範圍並只匯出有完整資料的病患
-            if not (50 <= systolic <= 250 and 30 <= diastolic <= 150):
+            if not (BloodPressureRange.SYSTOLIC_MIN <= systolic <= BloodPressureRange.SYSTOLIC_MAX and
+                    BloodPressureRange.DIASTOLIC_MIN <= diastolic <= BloodPressureRange.DIASTOLIC_MAX):
                 print(f"跳過第{row}行：血壓值超出合理範圍 (收縮壓:{systolic}, 舒張壓:{diastolic})")
-                print(f"  合理範圍: 收縮壓 50-250 mmHg, 舒張壓 30-150 mmHg")
+                print(f"  合理範圍: 收縮壓 {BloodPressureRange.SYSTOLIC_MIN}-{BloodPressureRange.SYSTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}, "
+                      f"舒張壓 {BloodPressureRange.DIASTOLIC_MIN}-{BloodPressureRange.DIASTOLIC_MAX} {HealthInsuranceCode.BP_UNIT}")
                 continue
                 
             # 第五步：設定血壓值和時間資訊
@@ -637,7 +753,7 @@ class UltraPatientTableWidget(QTableWidget):
                 checkbox.setChecked(True)
                 if row < len(self.patient_data):
                     patient_id = self.patient_data[row]['pat_pid']
-                    normalized_pid = patient_id.strip().zfill(7)
+                    normalized_pid = normalize_patient_id(patient_id)
                     self.selected_patients.add(normalized_pid)
         self._updating = False
         self.selection_changed.emit()
@@ -1018,7 +1134,7 @@ class UltraMainWindow(QMainWindow):
             unique_patients = set()
             for patient in self.table.patient_data:
                 if patient.get('pat_pid'):
-                    unique_patients.add(patient['pat_pid'].strip().zfill(7))
+                    unique_patients.add(normalize_patient_id(patient['pat_pid']))
             total = len(unique_patients)
         else:
             total = 0
@@ -1033,7 +1149,7 @@ class UltraMainWindow(QMainWindow):
                 actual_selected += 1
                 if row < len(self.table.patient_data):
                     patient_id = self.table.patient_data[row]['pat_pid']
-                    normalized_pid = patient_id.strip().zfill(7)
+                    normalized_pid = normalize_patient_id(patient_id)
                     self.table.selected_patients.add(normalized_pid)
         
         selected = len(self.table.selected_patients)
@@ -1218,14 +1334,14 @@ class UltraMainWindow(QMainWindow):
         for patient in data:
             xml_lines.append('  <hdata>')
             
-            # h1: 報告類別 (固定為1)
-            xml_lines.append('    <h1>1</h1>')
-            
+            # h1: 報告類別
+            xml_lines.append(f'    <h1>{HealthInsuranceCode.REPORT_TYPE}</h1>')
+
             # h2: 醫事機構代碼
             xml_lines.append(f'    <h2>{hospital_code}</h2>')
-            
-            # h3: 醫事類別 (固定為11)
-            xml_lines.append('    <h3>11</h3>')
+
+            # h3: 醫事類別
+            xml_lines.append(f'    <h3>{HealthInsuranceCode.MEDICAL_CATEGORY}</h3>')
             
             # h4: 血壓測量數值的年月 (從hdate取得)
             if patient.get('hdate'):
@@ -1248,11 +1364,11 @@ class UltraMainWindow(QMainWindow):
                 h5_value = f"{tw_year:03d}{current_datetime.month:02d}{current_datetime.day:02d}{current_datetime.hour:02d}{current_datetime.minute:02d}{current_datetime.second:02d}"
             xml_lines.append(f'    <h5>{h5_value}</h5>')
             
-            # h6: 就醫類別 (固定為01)
-            xml_lines.append('    <h6>01</h6>')
-            
+            # h6: 就醫類別
+            xml_lines.append(f'    <h6>{HealthInsuranceCode.CASE_TYPE}</h6>')
+
             # h7: 就醫序號 (查詢co03l.dbf的edate欄位)
-            h7_value = 'Z000'  # 預設值
+            h7_value = HealthInsuranceCode.DEFAULT_VISIT_SEQ
             if patient.get('pat_pid') and patient.get('hdate'):
                 key = f"{patient['pat_pid'].zfill(7)}_{patient['hdate']}"
                 if key in co03l_data:
@@ -1261,13 +1377,13 @@ class UltraMainWindow(QMainWindow):
                     if len(edate) > 3:
                         h7_value = edate[3:].zfill(4)
                     if not h7_value or h7_value == '0000':
-                        h7_value = 'Z000'
+                        h7_value = HealthInsuranceCode.DEFAULT_VISIT_SEQ
                 else:
-                    h7_value = '0023'  # 若無資料使用血壓檢驗項目代碼
+                    h7_value = HealthInsuranceCode.BP_ITEM_CODE  # 若無資料使用血壓檢驗項目代碼
             xml_lines.append(f'    <h7>{h7_value}</h7>')
-            
-            # h8: 補卡註記 (固定為1)
-            xml_lines.append('    <h8>1</h8>')
+
+            # h8: 補卡註記
+            xml_lines.append(f'    <h8>{HealthInsuranceCode.CARD_REPLACEMENT}</h8>')
             
             # h9: 身分證字號
             if patient.get('pat_id') and patient['pat_id'].strip():
@@ -1288,8 +1404,8 @@ class UltraMainWindow(QMainWindow):
             if patient.get('hdate'):
                 xml_lines.append(f'    <h12>{patient["hdate"]}</h12>')
             
-            # h15: 固定為Y00006
-            xml_lines.append('    <h15>Y00006</h15>')
+            # h15: 診斷代碼
+            xml_lines.append(f'    <h15>{HealthInsuranceCode.DIAGNOSIS_CODE}</h15>')
             
             # h16: 現在的時間點
             current_datetime = datetime.now()
@@ -1304,48 +1420,26 @@ class UltraMainWindow(QMainWindow):
                 h20_value = patient['hdate'] + time_part
                 xml_lines.append(f'    <h20>{h20_value}</h20>')
             
-            # h22: 固定為"血壓"
-            xml_lines.append('    <h22>血壓</h22>')
-            
-            # h26: 固定為0
-            xml_lines.append('    <h26>0</h26>')
+            # h22: 檢驗項目名稱
+            xml_lines.append(f'    <h22>{HealthInsuranceCode.BP_TEST_NAME}</h22>')
+
+            # h26: 轉檢FLAG
+            xml_lines.append(f'    <h26>{HealthInsuranceCode.TRANSFER_FLAG}</h26>')
             
             # 報告資料段 - 收縮壓
             if patient.get('systolic', 0) > 0:
                 xml_lines.append('    <rdata>')
-                xml_lines.append('      <r1>1</r1>')
-                xml_lines.append('      <r2>收縮壓</r2>')
-                xml_lines.append('      <r3>診間血壓監測(OBPM)</r3>')
+                xml_lines.append(f'      <r1>{HealthInsuranceCode.SYSTOLIC_SEQ}</r1>')
+                xml_lines.append(f'      <r2>{HealthInsuranceCode.SYSTOLIC_NAME}</r2>')
+                xml_lines.append(f'      <r3>{HealthInsuranceCode.BP_TEST_METHOD}</r3>')
                 xml_lines.append(f'      <r4>{patient["systolic"]}</r4>')
-                xml_lines.append('      <r5>mmHg</r5>')
-                xml_lines.append('      <r6-1>90-130</r6-1>')
+                xml_lines.append(f'      <r5>{HealthInsuranceCode.BP_UNIT}</r5>')
+                xml_lines.append(f'      <r6-1>{HealthInsuranceCode.SYSTOLIC_REFERENCE}</r6-1>')
                 xml_lines.append(f'      <r9>{hospital_code}</r9>')
                 
                 # r10: 測量時間 (htime加一分鐘，秒數統一)
                 if patient.get('hdate') and patient.get('htime'):
-                    # 解析時間並加一分鐘，秒數使用統一值
-                    try:
-                        time_str = patient['htime']
-                        if len(time_str) >= 6:
-                            hour = int(time_str[:2])
-                            minute = int(time_str[2:4])
-                            # 原始秒數不使用，改用統一秒數
-                            
-                            # 加一分鐘
-                            minute += 1
-                            if minute >= 60:
-                                minute = 0
-                                hour += 1
-                                if hour >= 24:
-                                    hour = 0
-                            
-                            # 只有秒數使用統一值，其他保持原參數
-                            r10_value = f"{patient['hdate']}{hour:02d}{minute:02d}{unified_second:02d}"
-                        else:
-                            r10_value = patient['hdate'] + patient['htime']
-                    except:
-                        r10_value = patient['hdate'] + patient['htime']
-                    
+                    r10_value = calculate_r10_time(patient['hdate'], patient['htime'], unified_second)
                     xml_lines.append(f'      <r10>{r10_value}</r10>')
                 
                 xml_lines.append('    </rdata>')
@@ -1353,39 +1447,17 @@ class UltraMainWindow(QMainWindow):
             # 報告資料段 - 舒張壓
             if patient.get('diastolic', 0) > 0:
                 xml_lines.append('    <rdata>')
-                xml_lines.append('      <r1>2</r1>')
-                xml_lines.append('      <r2>舒張壓</r2>')
-                xml_lines.append('      <r3>診間血壓監測(OBPM)</r3>')
+                xml_lines.append(f'      <r1>{HealthInsuranceCode.DIASTOLIC_SEQ}</r1>')
+                xml_lines.append(f'      <r2>{HealthInsuranceCode.DIASTOLIC_NAME}</r2>')
+                xml_lines.append(f'      <r3>{HealthInsuranceCode.BP_TEST_METHOD}</r3>')
                 xml_lines.append(f'      <r4>{patient["diastolic"]}</r4>')
-                xml_lines.append('      <r5>mmHg</r5>')
-                xml_lines.append('      <r6-1>60-80</r6-1>')
+                xml_lines.append(f'      <r5>{HealthInsuranceCode.BP_UNIT}</r5>')
+                xml_lines.append(f'      <r6-1>{HealthInsuranceCode.DIASTOLIC_REFERENCE}</r6-1>')
                 xml_lines.append(f'      <r9>{hospital_code}</r9>')
                 
                 # r10: 測量時間 (htime加一分鐘，秒數統一)
                 if patient.get('hdate') and patient.get('htime'):
-                    # 解析時間並加一分鐘，秒數使用統一值
-                    try:
-                        time_str = patient['htime']
-                        if len(time_str) >= 6:
-                            hour = int(time_str[:2])
-                            minute = int(time_str[2:4])
-                            # 原始秒數不使用，改用統一秒數
-                            
-                            # 加一分鐘
-                            minute += 1
-                            if minute >= 60:
-                                minute = 0
-                                hour += 1
-                                if hour >= 24:
-                                    hour = 0
-                            
-                            # 只有秒數使用統一值，其他保持原參數
-                            r10_value = f"{patient['hdate']}{hour:02d}{minute:02d}{unified_second:02d}"
-                        else:
-                            r10_value = patient['hdate'] + patient['htime']
-                    except:
-                        r10_value = patient['hdate'] + patient['htime']
-                    
+                    r10_value = calculate_r10_time(patient['hdate'], patient['htime'], unified_second)
                     xml_lines.append(f'      <r10>{r10_value}</r10>')
                 
                 xml_lines.append('    </rdata>')
