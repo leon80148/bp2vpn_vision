@@ -38,6 +38,7 @@ class UltraBloodPressureLoader(QObject):
     """超級優化的血壓資料載入器"""
     progress = Signal(int, int)
     finished = Signal(dict)
+    error_occurred = Signal(str)  # 新增錯誤信號
     
     def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         super().__init__()
@@ -185,8 +186,9 @@ class UltraBloodPressureLoader(QObject):
                         systolic_str, diastolic_str = hval.split('/', 1)
                         systolic = int(float(systolic_str))
                         diastolic = int(float(diastolic_str))
-                        
-                        if systolic <= 0 or diastolic <= 0:
+
+                        # 驗證血壓數值範圍（收縮壓: 50-250 mmHg, 舒張壓: 30-150 mmHg）
+                        if not (50 <= systolic <= 250 and 30 <= diastolic <= 150):
                             continue
                         
                         # 建立日期時間字串用於比較
@@ -261,10 +263,21 @@ class UltraBloodPressureLoader(QObject):
             print(f"- 最終有血壓病患: {patients_with_bp}")
             
             self.finished.emit(final_data)
-            
+
+        except FileNotFoundError as e:
+            error_msg = f"找不到檔案: {self.co18h_path}\n\n請確認DBF檔案是否存在"
+            print(f"載入錯誤: {error_msg}")
+            self.error_occurred.emit(error_msg)
+
+        except PermissionError as e:
+            error_msg = f"無法讀取檔案: {self.co18h_path}\n\n檔案可能正被其他程式使用"
+            print(f"載入錯誤: {error_msg}")
+            self.error_occurred.emit(error_msg)
+
         except Exception as e:
-            print(f"載入錯誤: {e}")
-            self.finished.emit({})
+            error_msg = f"載入血壓資料時發生錯誤\n\n錯誤訊息: {str(e)}\n檔案: {self.co18h_path}"
+            print(f"載入錯誤: {error_msg}")
+            self.error_occurred.emit(error_msg)
 
 
 class UltraPatientTableWidget(QTableWidget):
@@ -408,22 +421,24 @@ class UltraPatientTableWidget(QTableWidget):
             self.setItem(row, 2, QTableWidgetItem(patient.get('pat_namec', '')))
             self.setItem(row, 3, QTableWidgetItem(patient.get('pat_id', '')))
             
-            # 血壓值 - 可編輯的SpinBox，調整大小，移除單位顯示
+            # 血壓值 - 可編輯的SpinBox，設定合理範圍
             systolic_spin = QSpinBox()
-            systolic_spin.setRange(0, 300)
+            systolic_spin.setRange(0, 250)  # 收縮壓上限 250 mmHg
             systolic_spin.setMinimumHeight(28)
             systolic_spin.setMinimumWidth(100)
+            systolic_spin.setToolTip("收縮壓合理範圍: 50-250 mmHg")
             if bp_info.get('systolic'):
                 systolic_spin.setValue(bp_info['systolic'])
-            
+
             # 連接變更事件，實現自動勾選功能
             systolic_spin.valueChanged.connect(lambda v, r=row: self.on_bp_value_changed(r))
             self.setCellWidget(row, 4, systolic_spin)
-            
+
             diastolic_spin = QSpinBox()
-            diastolic_spin.setRange(0, 200)
+            diastolic_spin.setRange(0, 150)  # 舒張壓上限 150 mmHg
             diastolic_spin.setMinimumHeight(28)
             diastolic_spin.setMinimumWidth(100)
+            diastolic_spin.setToolTip("舒張壓合理範圍: 30-150 mmHg")
             if bp_info.get('diastolic'):
                 diastolic_spin.setValue(bp_info['diastolic'])
             
@@ -580,9 +595,10 @@ class UltraPatientTableWidget(QTableWidget):
             systolic = systolic_spin.value()
             diastolic = diastolic_spin.value()
             
-            # 第四步：只匯出有完整血壓資料的病患
-            if systolic <= 0 or diastolic <= 0:
-                print(f"跳過第{row}行：血壓值不完整 (收縮壓:{systolic}, 舒張壓:{diastolic})")
+            # 第四步：驗證血壓數值範圍並只匯出有完整資料的病患
+            if not (50 <= systolic <= 250 and 30 <= diastolic <= 150):
+                print(f"跳過第{row}行：血壓值超出合理範圍 (收縮壓:{systolic}, 舒張壓:{diastolic})")
+                print(f"  合理範圍: 收縮壓 50-250 mmHg, 舒張壓 30-150 mmHg")
                 continue
                 
             # 第五步：設定血壓值和時間資訊
@@ -642,12 +658,14 @@ class UltraLoadingThread(QThread):
     """載入執行緒"""
     progress = Signal(int, int)
     finished = Signal(dict)
-    
+    error_occurred = Signal(str)  # 新增錯誤信號
+
     def __init__(self, co18h_path: str, patient_ids: List[str], years_limit: float = None, start_date=None, end_date=None):
         super().__init__()
         self.loader = UltraBloodPressureLoader(co18h_path, patient_ids, years_limit, start_date, end_date)
         self.loader.progress.connect(self.progress.emit)
         self.loader.finished.connect(self.finished.emit)
+        self.loader.error_occurred.connect(self.error_occurred.emit)  # 連接錯誤信號
     
     def run(self):
         self.loader.load()
@@ -753,6 +771,8 @@ class UltraMainWindow(QMainWindow):
         self.hospital_code_input = QLineEdit()
         self.hospital_code_input.setPlaceholderText("請輸入10碼醫事機構代碼")
         self.hospital_code_input.setMaximumWidth(200)
+        self.hospital_code_input.setMaxLength(10)  # 限制最多10個字元
+        self.hospital_code_input.setToolTip("醫事機構代碼必須為10碼數字\n範例: 3522013684")
         button_layout1.addWidget(self.hospital_code_input)
         
         self.select_all_btn = QPushButton("全選")
@@ -906,6 +926,7 @@ class UltraMainWindow(QMainWindow):
         self.loading_thread = UltraLoadingThread(co18h_path, patient_ids, years_limit, start_date, end_date)
         self.loading_thread.progress.connect(self.on_loading_progress)
         self.loading_thread.finished.connect(self.on_loading_finished)
+        self.loading_thread.error_occurred.connect(self.on_loading_error)  # 連接錯誤處理
         self.loading_thread.start()
     
     def on_loading_progress(self, current: int, total: int):
@@ -914,11 +935,27 @@ class UltraMainWindow(QMainWindow):
         self.progress_bar.setValue(percent)
         self.status_bar.showMessage(f"掃描中... {current}/{total} ({percent}%)")
     
+    def on_loading_error(self, error_msg: str):
+        """載入發生錯誤"""
+        self.progress_bar.setVisible(False)
+        self.select_folder_btn.setEnabled(True)
+        self.status_bar.showMessage("載入失敗")
+
+        QMessageBox.critical(
+            self,
+            "載入錯誤",
+            error_msg
+        )
+
     def on_loading_finished(self, bp_data: dict):
         """載入完成"""
         self.progress_bar.setVisible(False)
         self.select_folder_btn.setEnabled(True)
-        
+
+        # 檢查是否有數據（空字典可能是因為錯誤）
+        if bp_data is None:
+            return  # 錯誤已由 on_loading_error 處理
+
         self.table.update_blood_pressure_data(bp_data)
         
         # 統計
@@ -1095,10 +1132,27 @@ class UltraMainWindow(QMainWindow):
         from datetime import datetime, timedelta
         import os
         
-        # 取得醫事機構代碼
+        # 取得並驗證醫事機構代碼
         hospital_code = self.hospital_code_input.text().strip()
+
         if not hospital_code:
             raise Exception("請先填入醫事機構代碼")
+
+        if len(hospital_code) != 10:
+            raise Exception(
+                f"醫事機構代碼格式錯誤\n\n"
+                f"您輸入的代碼: {hospital_code} ({len(hospital_code)}碼)\n"
+                f"正確格式: 必須為10碼數字\n\n"
+                f"範例: 3522013684"
+            )
+
+        if not hospital_code.isdigit():
+            raise Exception(
+                f"醫事機構代碼格式錯誤\n\n"
+                f"您輸入的代碼: {hospital_code}\n"
+                f"正確格式: 必須為10碼數字（不可包含英文或符號）\n\n"
+                f"範例: 3522013684"
+            )
         
         # 嘗試載入額外的DBF資料
         folder_path = self.table.dbf_folder
@@ -1341,10 +1395,36 @@ class UltraMainWindow(QMainWindow):
         xml_lines.append('</patient>')
         
         print(f"XML生成完成，包含 {h10_count} 個h10標籤")
-        
-        # 寫入檔案 (Big5編碼)
-        with open(filename, 'w', encoding='big5', errors='ignore') as f:
-            f.write('\n'.join(xml_lines))
+
+        # 寫入檔案 (Big5編碼，嚴格模式)
+        xml_content = '\n'.join(xml_lines)
+
+        try:
+            # 先測試是否可以完整轉換為 Big5
+            xml_content.encode('big5')
+
+            # 確認可以轉換後才寫入檔案
+            with open(filename, 'w', encoding='big5') as f:
+                f.write(xml_content)
+
+        except UnicodeEncodeError as e:
+            # 找出無法編碼的字元
+            problematic_chars = set()
+            for char in xml_content:
+                try:
+                    char.encode('big5')
+                except UnicodeEncodeError:
+                    problematic_chars.add(char)
+
+            error_msg = (
+                f"部分中文字無法轉為Big5編碼\n\n"
+                f"無法編碼的字元: {''.join(sorted(problematic_chars))}\n\n"
+                f"建議:\n"
+                f"1. 請檢查病患姓名是否包含特殊字（如：堃、煊、栢）\n"
+                f"2. 可手動修改資料後重新匯出\n"
+                f"3. 或聯絡系統管理員"
+            )
+            raise Exception(error_msg)
     
     def write_xml_and_zip(self, data: List[Dict], zip_filename: str):
         """寫入XML並壓縮成ZIP檔案"""
